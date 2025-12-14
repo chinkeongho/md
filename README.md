@@ -57,7 +57,7 @@ Single-user web app to browse, view, and edit the Markdown knowledge base in `ze
   - The script syncs files, runs `npm install --production`, installs the shipped unit, and starts it.
   - Ensure the vault directory (`VAULT_ROOT`) is writable by the service user; `.env` is read from `REMOTE_PATH/.env`.
 - Reverse proxy: see `deployment/md_web/md-web.conf` for an example nginx config (HTTP→HTTPS redirect, SSL cert/key placeholders, proxy to the Node service). Use certbot or your CA to populate the `ssl_certificate`/`ssl_certificate_key` paths.
-> Tip: the same `.env` in the repo root can be rsynced and used on the server; set `PORT` to match your nginx proxy (default 3009).
+> Tip: the same `.env` in the repo root can be rsynced and used on the server. Default: app listens on 3008, nginx listens on 3009 and proxies to the app; adjust `PORT`/nginx if you change ports.
 
 ## Notes
 - Calendar uses filenames containing dates (`YYYY-MM-DD` or `YYYYMMDD...`) to highlight existing notes; clicking a day creates/opens a note using the configured template (default `Daily/YYYY-MM-DD DAILY.md`).

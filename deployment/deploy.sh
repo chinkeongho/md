@@ -22,8 +22,7 @@ EXCLUDES=(
 )
 EXCLUDE_FLAGS=("${EXCLUDES[@]/#/--exclude=}")
 TARGET="${TARGET_USER}@${TARGET_HOST}"
-NGINX_CONF="${NGINX_CONF:-deployment/md_web/md-web.conf}"
-NGINX_CONF_BASENAME="$(basename "${NGINX_CONF}")"
+NGINX_CONF_PATH="${NGINX_CONF_PATH:-deployment/md_web/md-web.conf}"
 NGINX_REMOTE_CONF="${NGINX_REMOTE_CONF:-/etc/nginx/conf.d/md-web.conf}"
 
 echo "[+] Syncing files to ${TARGET}:${REMOTE_PATH}"
@@ -33,7 +32,7 @@ echo "[+] Installing dependencies and systemd unit on ${TARGET_HOST}"
 ssh ${SSH_OPTS} "${TARGET}" \
   REMOTE_PATH="${REMOTE_PATH}" SERVICE_NAME="${SERVICE_NAME}" \
   SUDO_CMD="${SUDO_CMD}" SUDO_FLAGS="${SUDO_FLAGS}" \
-  NGINX_CONF_BASENAME="${NGINX_CONF_BASENAME}" NGINX_REMOTE_CONF="${NGINX_REMOTE_CONF}" bash -s <<'EOF'
+  NGINX_CONF_PATH="${NGINX_CONF_PATH}" NGINX_REMOTE_CONF="${NGINX_REMOTE_CONF}" bash -s <<'EOF'
 set -euo pipefail
 cd "${REMOTE_PATH}"
 if [[ ! -f package.json ]]; then
@@ -57,8 +56,8 @@ ${SUDO_CMD} ${SUDO_FLAGS} systemctl enable ${SERVICE_NAME} || true
 ${SUDO_CMD} ${SUDO_FLAGS} systemctl restart ${SERVICE_NAME}
 ${SUDO_CMD} ${SUDO_FLAGS} systemctl status --no-pager ${SERVICE_NAME} || true
 # nginx config (if present locally and nginx exists)
-if command -v nginx >/dev/null 2>&1 && [[ -f "${REMOTE_PATH}/${NGINX_CONF_BASENAME}" ]]; then
-  ${SUDO_CMD} ${SUDO_FLAGS} install -m 644 "${REMOTE_PATH}/${NGINX_CONF_BASENAME}" "${NGINX_REMOTE_CONF}"
+if command -v nginx >/dev/null 2>&1 && [[ -f "${REMOTE_PATH}/${NGINX_CONF_PATH}" ]]; then
+  ${SUDO_CMD} ${SUDO_FLAGS} install -m 644 "${REMOTE_PATH}/${NGINX_CONF_PATH}" "${NGINX_REMOTE_CONF}"
   ${SUDO_CMD} ${SUDO_FLAGS} nginx -t && ${SUDO_CMD} ${SUDO_FLAGS} systemctl reload nginx
 fi
 EOS

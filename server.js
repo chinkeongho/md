@@ -218,7 +218,7 @@ async function resolveWikiTarget(targetRaw) {
   const baseNoExt = path.basename(trimmed, path.extname(trimmed));
   const byBaseNoExt = files.find((f) => path.basename(f.rel, path.extname(f.rel)) === baseNoExt);
   if (byBaseNoExt) return byBaseNoExt.rel;
-  return null;
+  return toPosix(candidateMd); // allow creation fallback
 }
 
 async function listDirectory(relDir = '', sortOrder = DEFAULT_SETTINGS.fileSortOrder) {

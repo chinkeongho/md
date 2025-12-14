@@ -3,26 +3,26 @@
 Example systemd unit and nginx reverse proxy modeled after the code_server deployment. Adjust paths, user, domain, and certs before use.
 
 ## Systemd Service
-File: `deployment/md_web/md_web.service`
+File: `deployment/md_web/md-web.service`
 
 - Set `WorkingDirectory` to your cloned repo (default `/home/cow/repos/md`).
-- Adjust `ExecStart` port or node path if needed (defaults: `/usr/bin/env PORT=3008 NODE_ENV=production /usr/bin/node server.js`).
+- Adjust `ExecStart` port or node path if needed (defaults: `/usr/bin/env PORT=3008 NODE_ENV=production node server.js`).
 - Install and enable:
   ```
-  sudo install -m 644 md_web.service /etc/systemd/system/md_web.service
+  sudo install -m 644 md-web.service /etc/systemd/system/md-web.service
   sudo systemctl daemon-reload
-  sudo systemctl enable md_web
-  sudo systemctl start md_web
-  sudo systemctl status md_web
+  sudo systemctl enable md-web
+  sudo systemctl start md-web
+  sudo systemctl status md-web
   ```
 - Ensure your `.env` at the working directory contains AUTH_USER, AUTH_PASS, SESSION_SECRET, VAULT_ROOT, PORT, etc.
 
 ## Nginx Reverse Proxy
-File: `example_deployment/md_web/md-web.conf`
+File: `deployment/md_web/md-web.conf`
 
-- Replace `example.com` with your domain.
+- Replace the domain with yours.
 - Update cert paths to your real certificate (e.g., from certbot).
-- The proxy expects the app on `127.0.0.1:3009`; change if you run on a different port.
+- The proxy listens on 3009 and forwards to the app on `127.0.0.1:3008`; change if you run on a different port.
 - Deploy:
   ```
   sudo install -m 644 md-web.conf /etc/nginx/conf.d/md-web.conf
