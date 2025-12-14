@@ -1,0 +1,22 @@
+{
+  "name": "md",
+  "version": "1.0.0",
+  "description": "Single-user web app to browse, view, and edit the Markdown knowledge base in `zett/` from a browser. No plugin system, no third-party contributor model—just a focused, self-hosted tool with simple login.",
+  "main": "server.js",
+  "scripts": {
+    "dev": "node server.js",
+    "test": "node scripts/test.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "express-session": "^1.18.2"
+  },
+  "devDependencies": {
+    "supertest": "^7.1.4"
+  }
+}

@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Obsidian-Style Vault</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+  <link id="hljs-light" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github.min.css">
+  <link id="hljs-dark" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark-dimmed.min.css" disabled>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked@11/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/highlight.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/languages/python.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/languages/javascript.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/languages/typescript.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/languages/bash.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/languages/shell.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/languages/json.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/languages/yaml.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/languages/markdown.min.js"></script>
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <div id="app">
+    <div id="login-view" class="card">
+      <h1>Vault Login</h1>
+      <form id="login-form">
+        <label>
+          Username
+          <input id="login-username" type="text" autocomplete="username" required>
+        </label>
+        <label>
+          Password
+          <input id="login-password" type="password" autocomplete="current-password" required>
+        </label>
+        <button type="submit">Login</button>
+        <p class="error" id="login-error"></p>
+      </form>
+    </div>
+
+    <div id="main-view" class="hidden">
+      <header class="topbar">
+        <div class="title">Vault</div>
+        <div class="path-display">
+          <input id="current-path-input" type="text" placeholder="No file loaded" disabled>
+        </div>
+        <div class="actions">
+          <button id="readme-btn">README</button>
+          <button id="new-note-btn">New note</button>
+          <button id="toggle-sidebar-btn" title="Toggle sidebar">☰</button>
+          <button id="back-btn" title="Back (Ctrl+Alt+Left)">◀</button>
+          <button id="forward-btn" title="Forward (Ctrl+Alt+Right)">▶</button>
+          <button id="save-btn">Save</button>
+          <button id="rename-btn">Rename</button>
+          <button id="delete-btn">Delete</button>
+          <button id="logout-btn">Logout</button>
+        </div>
+      </header>
+
+      <section class="workspace" id="workspace">
+        <aside class="sidebar">
+          <div class="panel">
+            <div class="panel-header">
+              <span>Calendar</span>
+              <div class="calendar-nav">
+                <button id="calendar-prev" aria-label="Previous month">&#8592;</button>
+                <div id="calendar-label"></div>
+                <button id="calendar-next" aria-label="Next month">&#8594;</button>
+              </div>
+            </div>
+            <div id="calendar-grid" class="calendar"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <span>Search</span>
+              <span class="status" id="search-status"></span>
+            </div>
+            <form id="search-form">
+              <input type="text" id="search-input" placeholder="Find text across notes">
+              <button type="submit">Go</button>
+            </form>
+            <ul id="search-results" class="list"></ul>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <span>Files</span>
+              <div class="breadcrumbs" id="breadcrumbs"></div>
+            </div>
+            <div class="file-actions">
+              <button id="refresh-btn">Refresh</button>
+            </div>
+            <div id="file-tree" class="tree"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header settings-header">
+              <button id="settings-toggle">Settings ▸</button>
+              <span class="status" id="settings-status"></span>
+            </div>
+            <div class="settings-field">
+              <label for="settings-theme">Theme</label>
+              <select id="settings-theme">
+                <option value="midnight">Midnight</option>
+                <option value="dracula">Dracula</option>
+                <option value="monokai">Monokai</option>
+                <option value="solarized">Solarized</option>
+                <option value="tokyonight">Tokyo Night</option>
+                <option value="nord">Nord</option>
+                <option value="gruvbox">Gruvbox Dark</option>
+                <option value="catppuccin">Catppuccin Mocha</option>
+                <option value="light">Light</option>
+                <option value="catppuccin-latte">Catppuccin Latte</option>
+                <option value="ocean">Ocean</option>
+                <option value="forest">Forest</option>
+                <option value="sand">Sand</option>
+                <option value="paper">Paper</option>
+              </select>
+            </div>
+            <div id="settings-body" class="settings-body hidden">
+              <div class="settings-field">
+                <label for="settings-daily-dir">Daily notes folder</label>
+                <input type="text" id="settings-daily-dir" placeholder="Daily">
+              </div>
+              <div class="settings-field">
+                <label for="settings-daily-template">Daily note filename template</label>
+                <input type="text" id="settings-daily-template" placeholder="Daily/YYYY-MM-DD DAILY.md">
+              </div>
+              <div class="settings-field">
+                <label for="settings-weekly-dir">Weekly notes folder</label>
+                <input type="text" id="settings-weekly-dir" placeholder="Weekly notes">
+              </div>
+              <div class="settings-field">
+                <label for="settings-weekly-template">Weekly note filename template (use YYYY and WW)</label>
+                <input type="text" id="settings-weekly-template" placeholder="Weekly notes/YYYY-{W}WW.md">
+              </div>
+              <div class="settings-field">
+                <label for="settings-sort-order">File sort order</label>
+                <select id="settings-sort-order">
+                  <option value="mtime_desc">Modified (newest first)</option>
+                  <option value="mtime_asc">Modified (oldest first)</option>
+                  <option value="name_asc">Name (A → Z)</option>
+                  <option value="name_desc">Name (Z → A)</option>
+                </select>
+              </div>
+              <div class="settings-field">
+                <label for="settings-shortcut-save">Shortcut: Save</label>
+                <input type="text" id="settings-shortcut-save" placeholder="Ctrl+S">
+              </div>
+              <div class="settings-field">
+                <label for="settings-shortcut-back">Shortcut: Back</label>
+                <input type="text" id="settings-shortcut-back" placeholder="Alt+ArrowLeft">
+              </div>
+              <div class="settings-field">
+                <label for="settings-shortcut-forward">Shortcut: Forward</label>
+                <input type="text" id="settings-shortcut-forward" placeholder="Alt+ArrowRight">
+              </div>
+              <div class="settings-field">
+                <label for="settings-shortcut-line-up">Shortcut: Move line up</label>
+                <input type="text" id="settings-shortcut-line-up" placeholder="Alt+ArrowUp">
+              </div>
+              <div class="settings-field">
+                <label for="settings-shortcut-line-down">Shortcut: Move line down</label>
+                <input type="text" id="settings-shortcut-line-down" placeholder="Alt+ArrowDown">
+              </div>
+              <div class="settings-field">
+                <label for="settings-shortcut-multiselect">Shortcut: Multi-select (next occurrence)</label>
+                <input type="text" id="settings-shortcut-multiselect" placeholder="Ctrl+D">
+              </div>
+              <div class="settings-field">
+                <label for="settings-shortcut-multiselect-all">Shortcut: Multi-select (all occurrences)</label>
+                <input type="text" id="settings-shortcut-multiselect-all" placeholder="Ctrl+Shift+D">
+              </div>
+              <div class="settings-field">
+                <label for="settings-shortcut-toggle">Shortcut: Toggle sidebar</label>
+                <input type="text" id="settings-shortcut-toggle" placeholder="Alt+S">
+              </div>
+              <div class="settings-field">
+                <label for="settings-search-limit">Search limit</label>
+                <input type="number" id="settings-search-limit" placeholder="1000" min="10">
+              </div>
+              <div class="settings-field">
+                <label for="settings-note-template">Note template (supports {{created}}, {{updated}}, {{date}}, {{title}})</label>
+                <textarea id="settings-note-template" rows="6" placeholder="---&#10;created: {{created}}&#10;updated: {{updated}}&#10;exercise:&#10;mood:&#10;code:&#10;---&#10;"></textarea>
+              </div>
+              <button id="settings-save">Save settings</button>
+            </div>
+          </div>
+        </aside>
+        <main class="editor-area">
+          <div class="editor-toolbar">
+            <span id="unsaved-indicator" class="badge">Saved</span>
+            <span id="message" class="status"></span>
+          </div>
+          <div id="replace-panel" class="replace-panel hidden">
+            <div class="replace-row">
+              <label>
+                Find
+                <input type="text" id="replace-find">
+              </label>
+              <label>
+                Replace
+                <input type="text" id="replace-with">
+              </label>
+            </div>
+            <div class="replace-actions">
+              <span id="replace-count" class="status"></span>
+              <div class="spacer"></div>
+              <button id="replace-apply">Replace all</button>
+              <button id="replace-cancel" type="button">Close</button>
+            </div>
+          </div>
+          <div class="panes" id="panes">
+            <textarea id="editor" spellcheck="false"></textarea>
+            <div id="pane-resizer" class="pane-resizer" title="Drag to resize"></div>
+            <div id="preview" class="preview"></div>
+            <div id="image-suggest" class="suggest hidden">
+              <ul id="image-suggest-list"></ul>
+            </div>
+          </div>
+        </main>
+      </section>
+    </div>
+
+    <div id="lightbox" class="lightbox hidden">
+      <div class="lightbox-inner">
+        <img id="lightbox-img" src="" alt="">
+      </div>
+    </div>
+
+    <div id="hover-preview" class="hover-preview hidden">
+      <div id="hover-preview-content" class="preview"></div>
+    </div>
+
+    <div id="readme-modal" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>Project README</h2>
+          <button id="readme-close">Close</button>
+        </div>
+        <div id="readme-body" class="modal-body preview"></div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
