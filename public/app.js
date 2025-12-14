@@ -664,6 +664,22 @@ async function openFile(path, options = {}) {
     updateHistoryButtons();
     highlightActiveInTree();
   } catch (err) {
+    if (err?.status === 404) {
+      try {
+        const created = await apiPost('/api/file/create', { path });
+        if (created && created.ok === false && created.reason === 'exists') {
+          // Race: someone created it between read and create; retry load
+          return openFile(path, { ...options, skipHistory: true });
+        }
+        await loadDirectory(state.currentDir);
+        await loadCalendarDates();
+        return openFile(path, { ...options, skipHistory: true });
+      } catch (createErr) {
+        setMessage('Failed to create missing file', 'error');
+        console.error(createErr);
+        return;
+      }
+    }
     setMessage('Failed to open file', 'error');
     console.error(err);
   }
