@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 WorkingDirectory=/home/cow/repos/md
 ExecStart=/usr/bin/env PORT=3008 NODE_ENV=production /usr/bin/node server.js
-EnvironmentFile=-/home/cow/repos/md-web/.env
+EnvironmentFile=-/home/cow/repos/md/.env
 Restart=always
 
 [Install]

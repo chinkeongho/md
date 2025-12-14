@@ -53,7 +53,7 @@ Single-user web app to browse, view, and edit the Markdown knowledge base in `ze
 ## Deploy (self-hosted)
 - Copy `.env.example` to `.env` (on the server) and set `AUTH_USER`, `AUTH_PASS`, `SESSION_SECRET`, optional `PORT`, `VAULT_ROOT`, and `SETTINGS_PATH`.
 - Use `deployment/deploy.sh` to rsync the project to your server and install a systemd service:
-  - `TARGET_HOST=your.host TARGET_USER=ubuntu REMOTE_PATH=/opt/obsidian-web PORT=3000 deployment/deploy.sh`
+  - `TARGET_HOST=your.host TARGET_USER=ubuntu REMOTE_PATH=/home/cow/repos/md PORT=3008 deployment/deploy.sh`
   - The script syncs files, runs `npm install --production`, installs the shipped unit, and starts it.
   - Ensure the vault directory (`VAULT_ROOT`) is writable by the service user; `.env` is read from `REMOTE_PATH/.env`.
 - Reverse proxy: see `deployment/md_web/md-web.conf` for an example nginx config (HTTP→HTTPS redirect, SSL cert/key placeholders, proxy to the Node service). Use certbot or your CA to populate the `ssl_certificate`/`ssl_certificate_key` paths.

@@ -3,10 +3,10 @@
 Example systemd unit and nginx reverse proxy modeled after the code_server deployment. Adjust paths, user, domain, and certs before use.
 
 ## Systemd Service
-File: `example_deployment/md_web/md_web.service`
+File: `deployment/md_web/md_web.service`
 
-- Set `WorkingDirectory` to your cloned repo (default `/home/cow/repos/md-web`).
-- Adjust `ExecStart` port or node path if needed (defaults: `/usr/bin/env PORT=3009 NODE_ENV=production /usr/bin/node server.js`).
+- Set `WorkingDirectory` to your cloned repo (default `/home/cow/repos/md`).
+- Adjust `ExecStart` port or node path if needed (defaults: `/usr/bin/env PORT=3008 NODE_ENV=production /usr/bin/node server.js`).
 - Install and enable:
   ```
   sudo install -m 644 md_web.service /etc/systemd/system/md_web.service

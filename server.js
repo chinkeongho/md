@@ -229,7 +229,13 @@ async function listDirectory(relDir = '', sortOrder = DEFAULT_SETTINGS.fileSortO
     // Skip node_modules or hidden server directories if they ever appear under the vault.
     if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
     const rel = toPosix(path.join(relDir || '', entry.name));
-    const stat = await fs.stat(path.join(dirPath, entry.name));
+    let stat;
+    try {
+      stat = await fs.stat(path.join(dirPath, entry.name));
+    } catch (err) {
+      if (err.code === 'ENOENT') continue;
+      throw err;
+    }
     mapped.push({
       name: entry.name,
       path: rel,
@@ -287,7 +293,13 @@ async function walkMarkdownFiles(relDir = '') {
         continue;
       }
       if (!isMarkdownFile(entry.name)) continue;
-      results.push({ rel: toPosix(childRel), full: childFull });
+      try {
+        await fs.access(childFull);
+        results.push({ rel: toPosix(childRel), full: childFull });
+      } catch (err) {
+        if (err.code === 'ENOENT') continue;
+        throw err;
+      }
     }
   }
   return results;
@@ -308,7 +320,13 @@ async function walkVaultFiles(relDir = '') {
         stack.push({ dirPath: childFull, relPath: childRel });
         continue;
       }
-      results.push({ rel: toPosix(childRel), full: childFull });
+      try {
+        await fs.access(childFull);
+        results.push({ rel: toPosix(childRel), full: childFull });
+      } catch (err) {
+        if (err.code === 'ENOENT') continue;
+        throw err;
+      }
     }
   }
   return results;

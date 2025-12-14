@@ -6,7 +6,7 @@ set -euo pipefail
 
 TARGET_HOST="${TARGET_HOST:-bh-cow}"
 TARGET_USER="${TARGET_USER:-cow}"
-REMOTE_PATH="${REMOTE_PATH:-/home/cow/repos/md-web}"
+REMOTE_PATH="${REMOTE_PATH:-/home/cow/repos/md}"
 SERVICE_NAME="${SERVICE_NAME:-md-web}"
 SSH_OPTS="${SSH_OPTS:--tt}"
 SUDO_CMD="${SUDO_CMD:-sudo}"
