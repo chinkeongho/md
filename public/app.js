@@ -647,7 +647,8 @@ function highlightActiveInTree() {
   if (matches.length) {
     const row = matches[0];
     row.classList.add('active');
-    row.scrollIntoView({ block: 'nearest' });
+    // Avoid scrolling the entire page; constrain to the file tree container.
+    row.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
 }
 
