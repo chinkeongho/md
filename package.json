@@ -14,7 +14,12 @@
   "dependencies": {
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
-    "express-session": "^1.18.2"
+    "express-session": "^1.18.2",
+    "html-to-docx": "^1.9.0",
+    "jsdom": "^25.0.1",
+    "marked": "^11.2.0",
+    "mermaid": "^10.9.1",
+    "puppeteer": "^23.11.1"
   },
   "devDependencies": {
     "supertest": "^7.1.4"

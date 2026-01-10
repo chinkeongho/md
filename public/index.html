@@ -200,8 +200,20 @@
         </aside>
         <main class="editor-area">
           <div class="editor-toolbar">
-            <span id="unsaved-indicator" class="badge">Saved</span>
-            <span id="message" class="status"></span>
+            <div class="toolbar-status">
+              <span id="unsaved-indicator" class="badge">Saved</span>
+              <span id="message" class="status"></span>
+            </div>
+            <div class="toolbar-actions">
+              <span id="export-status" class="status"></span>
+              <div class="export-menu">
+                <button id="export-btn" type="button" disabled>Export ▾</button>
+                <div id="export-menu" class="export-dropdown hidden">
+                  <button id="export-pdf-btn" type="button">Export PDF</button>
+                  <button id="export-docx-btn" type="button">Export DOCX</button>
+                </div>
+              </div>
+            </div>
           </div>
           <div id="replace-panel" class="replace-panel hidden">
             <div class="replace-row">
