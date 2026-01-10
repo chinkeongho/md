@@ -43,9 +43,14 @@ shortcutLineUp: 'Alt+ArrowUp',
 shortcutLineDown: 'Alt+ArrowDown',
 shortcutMultiSelect: 'Ctrl+D',
 shortcutMultiSelectAll: 'Ctrl+Shift+D',
-shortcutToggleSidebar: 'Alt+S',
-theme: 'light',
-searchLimit: 1000
+  shortcutToggleSidebar: 'Alt+S',
+  theme: 'light',
+  searchLimit: 1000,
+  lintEnabled: true,
+  lintOnSave: true,
+  lintNoBlankList: true,
+  lintTrimTrailing: true,
+  lintHeadingLevels: true
 };
 
 const ALLOWED_SORT_ORDERS = ['mtime_desc', 'mtime_asc', 'name_asc', 'name_desc'];
@@ -200,6 +205,11 @@ function sanitizeSettings(partial = {}) {
   cleaned.theme = ALLOWED_THEMES.includes(merged.theme) ? merged.theme : DEFAULT_SETTINGS.theme;
   cleaned.noteTemplate = typeof merged.noteTemplate === 'string' ? merged.noteTemplate : DEFAULT_SETTINGS.noteTemplate;
   cleaned.searchLimit = Number.isInteger(merged.searchLimit) ? Math.max(10, merged.searchLimit) : DEFAULT_SETTINGS.searchLimit;
+  cleaned.lintEnabled = typeof merged.lintEnabled === 'boolean' ? merged.lintEnabled : DEFAULT_SETTINGS.lintEnabled;
+  cleaned.lintOnSave = typeof merged.lintOnSave === 'boolean' ? merged.lintOnSave : DEFAULT_SETTINGS.lintOnSave;
+  cleaned.lintNoBlankList = typeof merged.lintNoBlankList === 'boolean' ? merged.lintNoBlankList : DEFAULT_SETTINGS.lintNoBlankList;
+  cleaned.lintTrimTrailing = typeof merged.lintTrimTrailing === 'boolean' ? merged.lintTrimTrailing : DEFAULT_SETTINGS.lintTrimTrailing;
+  cleaned.lintHeadingLevels = typeof merged.lintHeadingLevels === 'boolean' ? merged.lintHeadingLevels : DEFAULT_SETTINGS.lintHeadingLevels;
   const allowedWeekStarts = ['monday', 'sunday'];
   cleaned.weekStartsOn = allowedWeekStarts.includes((merged.weekStartsOn || '').toLowerCase())
     ? merged.weekStartsOn.toLowerCase()
@@ -403,6 +413,22 @@ function extractDatesFromName(name) {
     dates.add(`${compactMatch[1]}-${compactMatch[2]}-${compactMatch[3]}`);
   }
   return [...dates];
+}
+
+function formatDateLocal(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function parseMonthParam(raw) {
+  const match = /^(\d{4})-(\d{2})$/.exec(raw || '');
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (!year || month < 1 || month > 12) return null;
+  return { year, month };
 }
 
 async function collectCalendarDates() {
@@ -806,6 +832,34 @@ function buildApp() {
     try {
       const dates = await collectCalendarDates();
       res.json({ dates });
+    } catch (err) {
+      res.status(500).json({ error: 'calendar_failed', message: err.message });
+    }
+  });
+
+  app.get('/api/calendar/changes', requireAuth(AUTH_USER), async (req, res) => {
+    const parsed = parseMonthParam((req.query.month || '').toString());
+    if (!parsed) return res.status(400).json({ error: 'month_required' });
+    const { year, month } = parsed;
+    try {
+      const files = await walkMarkdownFiles();
+      const changes = {};
+      for (const file of files) {
+        let stat;
+        try {
+          stat = await fs.stat(file.full);
+        } catch {
+          continue;
+        }
+        const mtime = stat.mtime;
+        if (mtime.getFullYear() !== year || mtime.getMonth() + 1 !== month) continue;
+        const dateStr = formatDateLocal(mtime);
+        if (!changes[dateStr]) changes[dateStr] = [];
+        if (changes[dateStr].length >= 50) continue;
+        changes[dateStr].push(file.rel);
+      }
+      Object.values(changes).forEach((list) => list.sort());
+      res.json({ month: `${year}-${String(month).padStart(2, '0')}`, changes });
     } catch (err) {
       res.status(500).json({ error: 'calendar_failed', message: err.message });
     }

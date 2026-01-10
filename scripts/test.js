@@ -9,6 +9,8 @@ async function run() {
   fs.rmSync(vaultRoot, { recursive: true, force: true });
   fs.mkdirSync(vaultRoot, { recursive: true });
   fs.writeFileSync(path.join(vaultRoot, 'sample.md'), '# Sample\n\nContent here.');
+  const sampleTime = new Date(2025, 0, 3, 12, 0, 0);
+  fs.utimesSync(path.join(vaultRoot, 'sample.md'), sampleTime, sampleTime);
   fs.mkdirSync(path.join(vaultRoot, 'Daily'), { recursive: true });
   fs.writeFileSync(path.join(vaultRoot, 'Daily', 'note.md'), '# Daily Note');
   fs.writeFileSync(path.join(vaultRoot, 'image-221.webp'), 'binary');
@@ -52,6 +54,7 @@ async function run() {
 
   await agent.post('/api/file/rename').send({ oldPath: currentPath, newPath: 'renamed.md' }).expect(200);
   currentPath = 'renamed.md';
+  fs.utimesSync(path.join(vaultRoot, 'renamed.md'), sampleTime, sampleTime);
   const renamedRes = await agent.get('/api/file').query({ path: currentPath }).expect(200);
   assert(renamedRes.body.content.includes('Updated'), 'rename preserved content');
 
@@ -60,6 +63,10 @@ async function run() {
 
   const dayRes = await agent.post('/api/day').send({ date: '2025-01-01' }).expect(200);
   assert(dayRes.body.path.startsWith('DailyTests/2025-01-01'), 'daily note respects template path');
+
+  const changesRes = await agent.get('/api/calendar/changes').query({ month: '2025-01' }).expect(200);
+  assert(Array.isArray(changesRes.body.changes['2025-01-03']), 'calendar changes list');
+  assert(changesRes.body.changes['2025-01-03'].includes('renamed.md'), 'calendar changes include renamed file');
 
   fs.writeFileSync(path.join(vaultRoot, 'c.md'), '# C');
   fs.writeFileSync(path.join(vaultRoot, 'a.md'), '# A');
