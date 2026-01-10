@@ -1,4 +1,14 @@
-mermaid.initialize({ startOnLoad: false });
+const DARK_THEMES = new Set(['midnight', 'dracula', 'monokai', 'solarized', 'tokyonight', 'nord', 'gruvbox', 'catppuccin']);
+
+function getMermaidTheme(themeName) {
+  return DARK_THEMES.has((themeName || '').toLowerCase()) ? 'dark' : 'default';
+}
+
+function updateMermaidTheme(themeName) {
+  mermaid.initialize({ startOnLoad: false, theme: getMermaidTheme(themeName) });
+}
+
+updateMermaidTheme('light');
 
 const state = {
   currentPath: null,
@@ -7,6 +17,9 @@ const state = {
   calendarMonth: new Date(),
   calendarDates: new Set(),
   calendarWeeks: new Set(),
+  calendarChanges: {},
+  recentChanges: [],
+  hoverBound: false,
   lightboxBound: false,
   settings: {},
   history: [],
@@ -18,7 +31,8 @@ const state = {
   files: [],
   filePathSet: new Set(),
   suggest: { active: false, items: [], index: -1, query: '', mode: 'link', loading: false },
-  lastRenderedPreview: ''
+  lastRenderedPreview: '',
+  exporting: false
 };
 
 const els = {
@@ -92,7 +106,20 @@ const els = {
   replaceWith: document.getElementById('replace-with'),
   replaceApply: document.getElementById('replace-apply'),
   replaceCancel: document.getElementById('replace-cancel'),
-  replaceCount: document.getElementById('replace-count')
+  replaceCount: document.getElementById('replace-count'),
+  lintBtn: document.getElementById('lint-btn'),
+  exportBtn: document.getElementById('export-btn'),
+  exportMenu: document.getElementById('export-menu'),
+  exportPdf: document.getElementById('export-pdf-btn'),
+  exportDocx: document.getElementById('export-docx-btn'),
+  exportStatus: document.getElementById('export-status'),
+  settingsLintEnabled: document.getElementById('settings-lint-enabled'),
+  settingsLintOnSave: document.getElementById('settings-lint-on-save'),
+  settingsLintNoBlankList: document.getElementById('settings-lint-no-blank-list'),
+  settingsLintTrimTrailing: document.getElementById('settings-lint-trim-trailing'),
+  settingsLintHeadingLevels: document.getElementById('settings-lint-heading-levels'),
+  recentChanges: document.getElementById('recent-changes'),
+  recentSort: document.getElementById('recent-sort')
 };
 
 function setMessage(msg, tone = 'muted') {
@@ -104,6 +131,18 @@ function setMessage(msg, tone = 'muted') {
     els.message.style.color = '#1d9d65';
   } else {
     els.message.style.color = '';
+  }
+}
+
+function setExportStatus(msg, tone = 'muted') {
+  if (!els.exportStatus) return;
+  els.exportStatus.textContent = msg || '';
+  if (tone === 'error') {
+    els.exportStatus.style.color = '#c0392b';
+  } else if (tone === 'success') {
+    els.exportStatus.style.color = '#1d9d65';
+  } else {
+    els.exportStatus.style.color = '';
   }
 }
 
@@ -167,6 +206,7 @@ function setCurrentPathDisplay(path) {
   els.currentPathInput.disabled = !hasPath;
   els.currentPathInput.value = hasPath ? path : '';
   els.currentPathInput.placeholder = hasPath ? '' : 'No file loaded';
+  if (els.exportBtn) els.exportBtn.disabled = !hasPath || state.exporting;
 }
 
 function pushHistory(path) {
@@ -228,9 +268,22 @@ async function afterLogin() {
   setCurrentPathDisplay(null);
   await loadSettings();
   await Promise.all([loadTreeRoot(), loadCalendarDates()]);
+  await loadRecentChanges();
   setMessage('Ready');
   updateHistoryButtons();
   applySplit();
+  if (els.hoverPreviewContent && !state.hoverBound) {
+    els.hoverPreviewContent.addEventListener('click', (e) => {
+      const target = e.target.closest('.hover-link');
+      if (!target) return;
+      const path = target.getAttribute('data-open-path');
+      if (!path) return;
+      e.preventDefault();
+      openFile(path);
+      hideHoverPreview();
+    });
+    state.hoverBound = true;
+  }
 }
 
 function setUnsaved(flag) {
@@ -350,7 +403,9 @@ function buildWeeklyPath(year, week) {
   return rel.replace(/^\/+/, '');
 }
 
-function createRenderer(baseDir) {
+function createRenderer(baseDir, opts = {}) {
+  const notePath = opts.notePath || '';
+  let mermaidIndex = 0;
   const renderer = new marked.Renderer();
   renderer.link = (href, title, text) => {
     if ((href || '').startsWith('vault-wiki://')) {
@@ -371,7 +426,17 @@ function createRenderer(baseDir) {
   };
   renderer.code = (code, lang) => {
     if ((lang || '').toLowerCase() === 'mermaid') {
-      return `<div class="mermaid">${escapeHtml(code)}</div>`;
+      const idx = mermaidIndex++;
+      const noteAttr = notePath ? ` data-note-path="${escapeAttr(notePath)}"` : '';
+      return `
+        <div class="mermaid-block" data-mermaid-index="${idx}"${noteAttr}>
+          <div class="mermaid">${escapeHtml(code)}</div>
+          <div class="mermaid-actions">
+            <button type="button" class="mermaid-action" data-format="png">Save diagram as PNG</button>
+            <button type="button" class="mermaid-action" data-format="svg">Save diagram as SVG</button>
+          </div>
+        </div>
+      `;
     }
     const highlighted = highlightCode(code, lang);
     const langClass = lang ? `language-${escapeAttr(lang)}` : '';
@@ -406,10 +471,90 @@ function highlightCode(code, lang) {
   return escapeHtml(code);
 }
 
-function renderPreview(text) {
-  if (text === state.lastRenderedPreview) return;
+function isListItemLine(line) {
+  return /^\s*(?:[-*+]|\d+[.)])\s+/.test(line);
+}
+
+function lintMarkdown(text, options = {}) {
+  const lines = (text || '').split('\n');
+  const issues = [];
+  if (options.trimTrailing) {
+    lines.forEach((line, idx) => {
+      const trimmed = line.replace(/\s+$/g, '');
+      if (trimmed !== line) {
+        lines[idx] = trimmed;
+        issues.push({ line: idx + 1, rule: 'trim-trailing' });
+      }
+    });
+  }
+  if (options.noBlankList) {
+    let i = 1;
+    while (i < lines.length - 1) {
+      const isBlank = lines[i].trim() === '';
+      if (isBlank && isListItemLine(lines[i - 1]) && isListItemLine(lines[i + 1])) {
+        lines.splice(i, 1);
+        issues.push({ line: i + 1, rule: 'no-blank-list' });
+        continue;
+      }
+      i += 1;
+    }
+  }
+  if (options.headingLevels) {
+    let lastLevel = 0;
+    lines.forEach((line, idx) => {
+      const match = /^(#{1,6})\s+/.exec(line);
+      if (!match) return;
+      const level = match[1].length;
+      if (lastLevel > 0 && level > lastLevel + 1) {
+        const nextLevel = lastLevel + 1;
+        lines[idx] = `${'#'.repeat(nextLevel)} ${line.slice(match[0].length)}`;
+        issues.push({ line: idx + 1, rule: 'heading-levels' });
+        lastLevel = nextLevel;
+        return;
+      }
+      lastLevel = level;
+    });
+  }
+  return { text: lines.join('\n'), issues };
+}
+
+function getLintOptions() {
+  return {
+    enabled: state.settings.lintEnabled !== false,
+    onSave: state.settings.lintOnSave !== false,
+    noBlankList: state.settings.lintNoBlankList !== false,
+    trimTrailing: state.settings.lintTrimTrailing !== false,
+    headingLevels: state.settings.lintHeadingLevels !== false
+  };
+}
+
+function runLint({ showMessage = true } = {}) {
+  const options = getLintOptions();
+  if (!options.enabled) {
+    if (showMessage) setMessage('Linting is disabled in settings');
+    return { applied: false, issues: [] };
+  }
+  const result = lintMarkdown(els.editor.value, options);
+  const changed = result.text !== els.editor.value;
+  if (changed) {
+    els.editor.value = result.text;
+    renderPreview(result.text, { force: true });
+    setUnsaved(true);
+  }
+  if (showMessage) {
+    if (!result.issues.length) {
+      setMessage('No lint issues found', 'success');
+    } else {
+      setMessage(`Applied ${result.issues.length} lint fix${result.issues.length === 1 ? '' : 'es'}`, 'success');
+    }
+  }
+  return { applied: changed, issues: result.issues };
+}
+
+function renderPreview(text, options = {}) {
+  if (!options.force && text === state.lastRenderedPreview) return;
   const baseDir = state.currentPath ? state.currentPath.split('/').slice(0, -1).join('/') : '';
-  const html = renderMarkdownToHtml(text || '', baseDir, true);
+  const html = renderMarkdownToHtml(text || '', baseDir, true, state.currentPath);
   els.preview.innerHTML = html;
   if (window.hljs) {
     els.preview.querySelectorAll('pre code').forEach((block) => hljs.highlightElement(block));
@@ -422,6 +567,7 @@ function renderPreview(text) {
       console.error('Mermaid render failed', err);
     }
   }
+  bindMermaidActions(els.preview, state.currentPath);
   bindLightbox();
   bindWikiLinks();
   hydrateEmbeds();
@@ -474,7 +620,43 @@ function bindWikiLinks() {
   });
 }
 
-function renderMarkdownToHtml(text, baseDir, allowEmbeds) {
+function bindMermaidActions(root, fallbackPath) {
+  if (!root) return;
+  root.querySelectorAll('.mermaid-action').forEach((btn) => {
+    if (btn.dataset.bound === 'true') return;
+    btn.dataset.bound = 'true';
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const format = btn.getAttribute('data-format');
+      const block = btn.closest('.mermaid-block');
+      const index = block ? Number(block.getAttribute('data-mermaid-index')) : NaN;
+      const notePath = block?.getAttribute('data-note-path') || fallbackPath || state.currentPath;
+      if (!notePath || Number.isNaN(index)) {
+        setMessage('Mermaid export unavailable', 'error');
+        return;
+      }
+      try {
+        const url = `/api/export/mermaid-image?path=${encodeURIComponent(notePath)}&index=${index}&format=${encodeURIComponent(format)}`;
+        const res = await fetch(url, { credentials: 'include' });
+        if (!res.ok) throw new Error('download_failed');
+        const blob = await res.blob();
+        const filename = `${notePath.split('/').pop()?.replace(/\.[^/.]+$/, '') || 'note'}-diagram-${index + 1}.${format}`;
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(link.href);
+      } catch (err) {
+        console.error(err);
+        setMessage('Mermaid download failed', 'error');
+      }
+    });
+  });
+}
+
+function renderMarkdownToHtml(text, baseDir, allowEmbeds, notePath) {
   marked.setOptions({
     gfm: true,
     breaks: true,
@@ -482,7 +664,7 @@ function renderMarkdownToHtml(text, baseDir, allowEmbeds) {
   });
   const stripped = stripFrontmatter(text);
   const preprocessed = preprocessWiki(stripped, baseDir, { allowEmbeds });
-  return marked.parse(preprocessed, { renderer: createRenderer(baseDir) });
+  return marked.parse(preprocessed, { renderer: createRenderer(baseDir, { notePath }) });
 }
 
 async function resolveWikiTargetClient(target) {
@@ -513,7 +695,7 @@ async function hydrateEmbeds() {
       } else {
         const data = await apiGet(`/api/file?path=${encodeURIComponent(resolved)}`);
         const embedBase = resolved.split('/').slice(0, -1).join('/');
-        contentEl.innerHTML = renderMarkdownToHtml(data.content || '', embedBase, false);
+        contentEl.innerHTML = renderMarkdownToHtml(data.content || '', embedBase, false, resolved);
         const mermaidBlocks = contentEl.querySelectorAll('.mermaid');
         if (mermaidBlocks.length) {
           try {
@@ -522,6 +704,7 @@ async function hydrateEmbeds() {
             console.error('Mermaid render failed (embed)', err);
           }
         }
+        bindMermaidActions(contentEl, resolved);
         if (window.hljs) {
           contentEl.querySelectorAll('pre code').forEach((block) => hljs.highlightElement(block));
         }
@@ -699,9 +882,14 @@ async function saveFile() {
     return;
   }
   try {
+    const lintOptions = getLintOptions();
+    if (lintOptions.enabled && lintOptions.onSave) {
+      runLint({ showMessage: false });
+    }
     await apiPost('/api/file/save', { path: state.currentPath, content: els.editor.value });
     setUnsaved(false);
     setMessage('Saved', 'success');
+    await Promise.all([loadCalendarDates(), loadRecentChanges()]);
   } catch (err) {
     setMessage('Save failed', 'error');
     console.error(err);
@@ -771,6 +959,55 @@ async function deleteNote() {
   }
 }
 
+function toggleExportMenu(open) {
+  if (!els.exportMenu) return;
+  const shouldOpen = typeof open === 'boolean' ? open : els.exportMenu.classList.contains('hidden');
+  els.exportMenu.classList.toggle('hidden', !shouldOpen);
+}
+
+function closeExportMenu() {
+  toggleExportMenu(false);
+}
+
+function extractDownloadName(res, fallback) {
+  const header = res.headers.get('Content-Disposition') || '';
+  const match = header.match(/filename="?([^";]+)"?/i);
+  return match ? match[1] : fallback;
+}
+
+async function exportNote(format) {
+  if (!state.currentPath || state.exporting) return;
+  state.exporting = true;
+  if (els.exportBtn) els.exportBtn.disabled = true;
+  setExportStatus(`Exporting ${format.toUpperCase()}...`);
+  closeExportMenu();
+  try {
+    const url = `/api/export/${format}?path=${encodeURIComponent(state.currentPath)}`;
+    const res = await fetch(url, { credentials: 'include' });
+    if (!res.ok) {
+      throw new Error('export_failed');
+    }
+    const blob = await res.blob();
+    const fallbackName = `${state.currentPath.split('/').pop()?.replace(/\.[^/.]+$/, '') || 'note'}.${format}`;
+    const filename = extractDownloadName(res, fallbackName);
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(link.href);
+    setExportStatus(`${format.toUpperCase()} exported`, 'success');
+    setTimeout(() => setExportStatus(''), 2000);
+  } catch (err) {
+    console.error(err);
+    setExportStatus(`${format.toUpperCase()} export failed`, 'error');
+  } finally {
+    state.exporting = false;
+    if (els.exportBtn) els.exportBtn.disabled = !state.currentPath;
+  }
+}
+
 els.saveBtn.addEventListener('click', saveFile);
 els.newBtn.addEventListener('click', newNote);
 els.renameBtn.addEventListener('click', renameNote);
@@ -787,12 +1024,43 @@ els.forwardBtn.addEventListener('click', () => goHistory(1));
 els.toggleSidebarBtn.addEventListener('click', () => {
   toggleSidebar();
 });
+if (els.lintBtn) {
+  els.lintBtn.addEventListener('click', () => runLint());
+}
+if (els.exportBtn) {
+  els.exportBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (els.exportBtn.disabled) return;
+    toggleExportMenu();
+  });
+}
+if (els.exportPdf) {
+  els.exportPdf.addEventListener('click', (e) => {
+    e.stopPropagation();
+    exportNote('pdf');
+  });
+}
+if (els.exportDocx) {
+  els.exportDocx.addEventListener('click', (e) => {
+    e.stopPropagation();
+    exportNote('docx');
+  });
+}
+document.addEventListener('click', (e) => {
+  if (!els.exportMenu || !els.exportBtn) return;
+  if (!els.exportMenu.contains(e.target) && !els.exportBtn.contains(e.target)) {
+    closeExportMenu();
+  }
+});
 if (els.readmeBtn) els.readmeBtn.addEventListener('click', showProjectReadme);
 if (els.readmeClose) els.readmeClose.addEventListener('click', () => toggleReadme(false));
 if (els.readmeModal) {
   els.readmeModal.addEventListener('click', (e) => {
     if (e.target === els.readmeModal) toggleReadme(false);
   });
+}
+if (els.recentSort) {
+  els.recentSort.addEventListener('change', renderRecentChanges);
 }
 
 let isResizing = false;
@@ -870,9 +1138,91 @@ async function loadCalendarDates() {
       if (m) weekKeys.add(m[1]);
     });
     state.calendarWeeks = weekKeys;
+    await loadCalendarChanges(state.calendarMonth);
+    await loadRecentChanges();
     renderCalendar();
   } catch (err) {
     console.error(err);
+  }
+}
+
+async function loadCalendarChanges(monthDate) {
+  const d = monthDate instanceof Date ? monthDate : new Date();
+  const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  try {
+    const data = await apiGet(`/api/calendar/changes?month=${encodeURIComponent(key)}`);
+    state.calendarChanges = data.changes || {};
+  } catch (err) {
+    state.calendarChanges = {};
+    console.error('Calendar changes failed', err);
+  }
+}
+
+function buildMonthKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function parseChangeEntries(changes) {
+  const entries = [];
+  Object.entries(changes || {}).forEach(([dateStr, paths]) => {
+    (paths || []).forEach((path) => {
+      entries.push({ date: dateStr, path });
+    });
+  });
+  return entries;
+}
+
+async function loadRecentChanges() {
+  if (!els.recentChanges) return;
+  const now = new Date();
+  const currentKey = buildMonthKey(now);
+  const prevDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const prevKey = buildMonthKey(prevDate);
+  try {
+    const [current, previous] = await Promise.all([
+      apiGet(`/api/calendar/changes?month=${encodeURIComponent(currentKey)}`),
+      apiGet(`/api/calendar/changes?month=${encodeURIComponent(prevKey)}`)
+    ]);
+    const entries = [...parseChangeEntries(current.changes), ...parseChangeEntries(previous.changes)];
+    state.recentChanges = entries;
+    renderRecentChanges();
+  } catch (err) {
+    console.error('Recent changes failed', err);
+    state.recentChanges = [];
+    renderRecentChanges();
+  }
+}
+
+function renderRecentChanges() {
+  if (!els.recentChanges) return;
+  const sortMode = els.recentSort?.value || 'newest';
+  const entries = [...(state.recentChanges || [])];
+  const compareDate = (a, b) => a.date.localeCompare(b.date);
+  if (sortMode === 'oldest') {
+    entries.sort((a, b) => compareDate(a, b) || a.path.localeCompare(b.path));
+  } else if (sortMode === 'title') {
+    entries.sort((a, b) => a.path.localeCompare(b.path) || compareDate(a, b));
+  } else {
+    entries.sort((a, b) => compareDate(b, a) || a.path.localeCompare(b.path));
+  }
+  const maxItems = 80;
+  els.recentChanges.innerHTML = '';
+  entries.slice(0, maxItems).forEach((item) => {
+    const li = document.createElement('li');
+    li.innerHTML = `
+      <button type="button" class="recent-link" data-open-path="${escapeAttr(item.path)}">
+        <span class="recent-title">${escapeHtml(item.path)}</span>
+        <span class="recent-meta">${escapeHtml(item.date)}</span>
+      </button>
+    `;
+    li.querySelector('button')?.addEventListener('click', () => openFile(item.path));
+    els.recentChanges.appendChild(li);
+  });
+  if (!entries.length) {
+    const li = document.createElement('li');
+    li.className = 'status';
+    li.textContent = 'No recent changes';
+    els.recentChanges.appendChild(li);
   }
 }
 
@@ -897,11 +1247,42 @@ function hideHoverPreview() {
   if (els.hoverPreview) els.hoverPreview.classList.add('hidden');
 }
 
+function buildChangeListHtml(dateStr) {
+  const changes = state.calendarChanges[dateStr] || [];
+  if (!changes.length) return '';
+  const items = changes
+    .map((path) => `<li><button type="button" class="hover-link" data-open-path="${escapeAttr(path)}">${escapeHtml(path)}</button></li>`)
+    .join('');
+  return `
+    <div class="change-list">
+      <div class="change-title">Modified notes</div>
+      <ul>${items}</ul>
+    </div>
+  `;
+}
+
+async function loadDayHoverPreview(dateStr, evt) {
+  const path = buildDailyPathClient(dateStr);
+  let snippet = '';
+  try {
+    const data = await apiGet(`/api/file?path=${encodeURIComponent(path)}`);
+    const baseDir = path.split('/').slice(0, -1).join('/');
+    snippet = renderMarkdownToHtml((data.content || '').slice(0, 1200), baseDir, false, data.path);
+  } catch (err) {
+    if (err.status !== 404) {
+      console.error('Day hover preview failed', err);
+    }
+    snippet = '<div class="status">No daily note</div>';
+  }
+  const changesHtml = buildChangeListHtml(dateStr);
+  showHoverPreview(`${snippet}${changesHtml}`, evt);
+}
+
 async function loadHoverPreview(path, evt) {
   try {
     const data = await apiGet(`/api/file?path=${encodeURIComponent(path)}`);
     const baseDir = path.split('/').slice(0, -1).join('/');
-    const snippet = renderMarkdownToHtml((data.content || '').slice(0, 1200), baseDir, false);
+    const snippet = renderMarkdownToHtml((data.content || '').slice(0, 1200), baseDir, false, data.path);
     showHoverPreview(snippet, evt);
   } catch (err) {
     if (err.status === 404) {
@@ -917,6 +1298,12 @@ function scheduleHoverPreview(path, evt) {
   if (!path) return;
   if (hoverTimer) clearTimeout(hoverTimer);
   hoverTimer = setTimeout(() => loadHoverPreview(path, evt), 250);
+}
+
+function scheduleDayHoverPreview(dateStr, evt) {
+  if (!dateStr) return;
+  if (hoverTimer) clearTimeout(hoverTimer);
+  hoverTimer = setTimeout(() => loadDayHoverPreview(dateStr, evt), 250);
 }
 
 function renderCalendar() {
@@ -968,11 +1355,11 @@ function renderCalendar() {
         cell.textContent = dayNum;
         cell.className = 'calendar-day';
         if (state.calendarDates.has(dateStr)) cell.classList.add('has-note');
+        if (state.calendarChanges[dateStr]?.length) cell.classList.add('has-changes');
         if (dateStr === todayStr) cell.classList.add('today');
         cell.addEventListener('click', () => openDay(dateStr));
         cell.addEventListener('mouseenter', (e) => {
-          const path = buildDailyPathClient(dateStr);
-          scheduleHoverPreview(path, e);
+          scheduleDayHoverPreview(dateStr, e);
         });
         cell.addEventListener('mouseleave', hideHoverPreview);
       } else {
@@ -1009,17 +1396,19 @@ async function openWeek(weekYear, weekNumber) {
   }
 }
 
-els.calendarPrev.addEventListener('click', () => {
+els.calendarPrev.addEventListener('click', async () => {
   const d = new Date(state.calendarMonth);
   d.setMonth(d.getMonth() - 1);
   state.calendarMonth = d;
+  await loadCalendarChanges(state.calendarMonth);
   renderCalendar();
 });
 
-els.calendarNext.addEventListener('click', () => {
+els.calendarNext.addEventListener('click', async () => {
   const d = new Date(state.calendarMonth);
   d.setMonth(d.getMonth() + 1);
   state.calendarMonth = d;
+  await loadCalendarChanges(state.calendarMonth);
   renderCalendar();
 });
 
@@ -1101,8 +1490,6 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
-const DARK_THEMES = new Set(['midnight', 'dracula', 'monokai', 'solarized', 'tokyonight', 'nord', 'gruvbox', 'catppuccin']);
-
 function applyTheme(theme) {
   document.body.setAttribute('data-theme', theme || 'light');
   const darkLink = document.getElementById('hljs-dark');
@@ -1112,6 +1499,7 @@ function applyTheme(theme) {
     darkLink.disabled = !useDark;
     lightLink.disabled = useDark;
   }
+  updateMermaidTheme(theme);
   try {
     localStorage.setItem('preferredTheme', theme || 'light');
   } catch {
@@ -1410,7 +1798,7 @@ async function moveNode(path) {
 async function showProjectReadme() {
   try {
     const data = await apiGet('/api/project-readme');
-    const html = renderMarkdownToHtml(data.content || '', '', true);
+    const html = renderMarkdownToHtml(data.content || '', '', true, '');
     els.readmeBody.innerHTML = html;
     if (window.hljs) {
       els.readmeBody.querySelectorAll('pre code').forEach((block) => hljs.highlightElement(block));
@@ -1501,6 +1889,11 @@ async function loadSettings() {
     if (els.settingsTheme) els.settingsTheme.value = state.settings.theme || 'light';
     if (els.settingsNoteTemplate) els.settingsNoteTemplate.value = state.settings.noteTemplate || '';
     if (els.settingsSearchLimit) els.settingsSearchLimit.value = state.settings.searchLimit || 1000;
+    if (els.settingsLintEnabled) els.settingsLintEnabled.checked = state.settings.lintEnabled !== false;
+    if (els.settingsLintOnSave) els.settingsLintOnSave.checked = state.settings.lintOnSave !== false;
+    if (els.settingsLintNoBlankList) els.settingsLintNoBlankList.checked = state.settings.lintNoBlankList !== false;
+    if (els.settingsLintTrimTrailing) els.settingsLintTrimTrailing.checked = state.settings.lintTrimTrailing !== false;
+    if (els.settingsLintHeadingLevels) els.settingsLintHeadingLevels.checked = state.settings.lintHeadingLevels !== false;
     applyTheme(state.settings.theme || 'light');
     if (els.settingsStatus) els.settingsStatus.textContent = '';
   } catch (err) {
@@ -1527,7 +1920,12 @@ async function saveSettings() {
       shortcutMultiSelectAll: els.settingsShortcutMultiSelectAll.value,
       shortcutToggleSidebar: els.settingsShortcutToggle.value,
       noteTemplate: els.settingsNoteTemplate.value,
-      searchLimit: Number(els.settingsSearchLimit.value) || undefined
+      searchLimit: Number(els.settingsSearchLimit.value) || undefined,
+      lintEnabled: !!els.settingsLintEnabled?.checked,
+      lintOnSave: !!els.settingsLintOnSave?.checked,
+      lintNoBlankList: !!els.settingsLintNoBlankList?.checked,
+      lintTrimTrailing: !!els.settingsLintTrimTrailing?.checked,
+      lintHeadingLevels: !!els.settingsLintHeadingLevels?.checked
     };
     const data = await apiPost('/api/settings', payload);
     state.settings = data.settings || {};
@@ -1557,6 +1955,7 @@ if (els.settingsTheme) {
     state.settings = state.settings || {};
     state.settings.theme = theme;
     applyTheme(theme);
+    renderPreview(els.editor.value, { force: true });
   });
 }
 

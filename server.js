@@ -15,6 +15,10 @@ const AUTH_PASS = process.env.AUTH_PASS || 'password';
 const SETTINGS_PATH = path.resolve(process.env.SETTINGS_PATH || path.join(__dirname, '.vault_settings.json'));
 const VAULT_ROOT = path.resolve(process.env.VAULT_ROOT || DEFAULT_VAULT);
 const MAX_SEARCH_RESULTS = 50;
+const EXPORT_PDF_ENABLED = process.env.EXPORT_PDF_ENABLED !== 'false';
+const EXPORT_DOCX_ENABLED = process.env.EXPORT_DOCX_ENABLED !== 'false';
+const EXPORT_PDF_PAGE_SIZE = process.env.EXPORT_PDF_PAGE_SIZE || 'A4';
+const EXPORT_PDF_MARGIN = process.env.EXPORT_PDF_MARGIN || '0.75in';
 
 const DEFAULT_SETTINGS = {
   dailyNotesDir: 'Daily',
@@ -39,9 +43,14 @@ shortcutLineUp: 'Alt+ArrowUp',
 shortcutLineDown: 'Alt+ArrowDown',
 shortcutMultiSelect: 'Ctrl+D',
 shortcutMultiSelectAll: 'Ctrl+Shift+D',
-shortcutToggleSidebar: 'Alt+S',
-theme: 'light',
-searchLimit: 1000
+  shortcutToggleSidebar: 'Alt+S',
+  theme: 'light',
+  searchLimit: 1000,
+  lintEnabled: true,
+  lintOnSave: true,
+  lintNoBlankList: true,
+  lintTrimTrailing: true,
+  lintHeadingLevels: true
 };
 
 const ALLOWED_SORT_ORDERS = ['mtime_desc', 'mtime_asc', 'name_asc', 'name_desc'];
@@ -61,6 +70,7 @@ const ALLOWED_THEMES = [
   'sand',
   'paper'
 ];
+const DARK_THEMES = new Set(['midnight', 'dracula', 'monokai', 'solarized', 'tokyonight', 'nord', 'gruvbox', 'catppuccin']);
 const PROJECT_README = path.join(__dirname, 'README.md');
 
 function toPosix(relPath) {
@@ -74,6 +84,61 @@ function resolveVaultPath(relPath = '') {
     throw new Error('Invalid path');
   }
   return fullPath;
+}
+
+function escapeHtml(str = '') {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function escapeAttr(str = '') {
+  return str.replace(/"/g, '&quot;');
+}
+
+function stripFrontmatter(text = '') {
+  if (!text.startsWith('---')) return text;
+  const match = text.match(/^---\n([\s\S]*?)\n---\n?/);
+  if (!match) return text;
+  return text.slice(match[0].length);
+}
+
+function extractFrontmatterTitle(text = '') {
+  if (!text.startsWith('---')) return null;
+  const match = text.match(/^---\n([\s\S]*?)\n---\n?/);
+  if (!match) return null;
+  const block = match[1];
+  const titleLine = block
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line.toLowerCase().startsWith('title:'));
+  if (!titleLine) return null;
+  return titleLine.split(':').slice(1).join(':').trim() || null;
+}
+
+function getMermaidTheme(themeName) {
+  return DARK_THEMES.has((themeName || '').toLowerCase()) ? 'dark' : 'default';
+}
+
+let exportDeps = null;
+
+function loadExportDeps() {
+  if (exportDeps) return exportDeps;
+  try {
+    const { marked } = require('marked');
+    const { JSDOM } = require('jsdom');
+    const htmlToDocx = require('html-to-docx');
+    const puppeteer = require('puppeteer');
+    const mermaidPath = require.resolve('mermaid/dist/mermaid.min.js');
+    exportDeps = { marked, JSDOM, htmlToDocx, puppeteer, mermaidPath };
+    return exportDeps;
+  } catch (err) {
+    err.message = `Export dependencies missing: ${err.message}`;
+    throw err;
+  }
 }
 
 async function loadSettings() {
@@ -140,6 +205,11 @@ function sanitizeSettings(partial = {}) {
   cleaned.theme = ALLOWED_THEMES.includes(merged.theme) ? merged.theme : DEFAULT_SETTINGS.theme;
   cleaned.noteTemplate = typeof merged.noteTemplate === 'string' ? merged.noteTemplate : DEFAULT_SETTINGS.noteTemplate;
   cleaned.searchLimit = Number.isInteger(merged.searchLimit) ? Math.max(10, merged.searchLimit) : DEFAULT_SETTINGS.searchLimit;
+  cleaned.lintEnabled = typeof merged.lintEnabled === 'boolean' ? merged.lintEnabled : DEFAULT_SETTINGS.lintEnabled;
+  cleaned.lintOnSave = typeof merged.lintOnSave === 'boolean' ? merged.lintOnSave : DEFAULT_SETTINGS.lintOnSave;
+  cleaned.lintNoBlankList = typeof merged.lintNoBlankList === 'boolean' ? merged.lintNoBlankList : DEFAULT_SETTINGS.lintNoBlankList;
+  cleaned.lintTrimTrailing = typeof merged.lintTrimTrailing === 'boolean' ? merged.lintTrimTrailing : DEFAULT_SETTINGS.lintTrimTrailing;
+  cleaned.lintHeadingLevels = typeof merged.lintHeadingLevels === 'boolean' ? merged.lintHeadingLevels : DEFAULT_SETTINGS.lintHeadingLevels;
   const allowedWeekStarts = ['monday', 'sunday'];
   cleaned.weekStartsOn = allowedWeekStarts.includes((merged.weekStartsOn || '').toLowerCase())
     ? merged.weekStartsOn.toLowerCase()
@@ -345,6 +415,22 @@ function extractDatesFromName(name) {
   return [...dates];
 }
 
+function formatDateLocal(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function parseMonthParam(raw) {
+  const match = /^(\d{4})-(\d{2})$/.exec(raw || '');
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (!year || month < 1 || month > 12) return null;
+  return { year, month };
+}
+
 async function collectCalendarDates() {
   const mdFiles = await walkMarkdownFiles();
   const found = new Set();
@@ -386,6 +472,215 @@ async function searchVault(query) {
     matchesContent.push({ path: file.rel, snippet });
   }
   return [...matchesNames, ...matchesContent];
+}
+
+function resolveExportResource(href, baseDir) {
+  if (!href) return '';
+  if (/^(https?:|mailto:|data:|tel:)/i.test(href)) return href;
+  const clean = href.replace(/^\.\//, '').replace(/^\/+/, '');
+  const prefix = baseDir ? `${baseDir}/` : '';
+  return toPosix(path.posix.join(prefix, clean));
+}
+
+function renderMarkdownToHtmlForExport(text, baseDir) {
+  const { marked } = loadExportDeps();
+  const renderer = new marked.Renderer();
+  renderer.link = (href, title, linkText) => {
+    const url = resolveExportResource(href, baseDir);
+    const t = title ? ` title="${escapeHtml(title)}"` : '';
+    return `<a href="${escapeAttr(url)}"${t}>${linkText}</a>`;
+  };
+  renderer.image = (href, title, alt) => {
+    const url = resolveExportResource(href, baseDir);
+    const t = title ? ` title="${escapeHtml(title)}"` : '';
+    return `<img src="${escapeAttr(url)}" alt="${escapeHtml(alt || '')}"${t}>`;
+  };
+  renderer.code = (code, lang) => {
+    if ((lang || '').toLowerCase() === 'mermaid') {
+      return `<div class="mermaid">${escapeHtml(code)}</div>`;
+    }
+    return `<pre><code>${escapeHtml(code)}</code></pre>`;
+  };
+  marked.setOptions({ gfm: true, breaks: true });
+  const stripped = stripFrontmatter(text);
+  return marked.parse(stripped, { renderer });
+}
+
+function getMimeType(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  switch (ext) {
+    case '.png':
+      return 'image/png';
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg';
+    case '.gif':
+      return 'image/gif';
+    case '.webp':
+      return 'image/webp';
+    case '.svg':
+      return 'image/svg+xml';
+    default:
+      return 'application/octet-stream';
+  }
+}
+
+async function inlineImages(html, baseDir) {
+  const { JSDOM } = loadExportDeps();
+  const dom = new JSDOM(html);
+  const { document } = dom.window;
+  const images = [...document.querySelectorAll('img')];
+  for (const img of images) {
+    const src = img.getAttribute('src') || '';
+    if (!src || /^(https?:|mailto:|data:|tel:)/i.test(src)) continue;
+    const normalized = src.replace(/^\/?vault\//, '').split('?')[0];
+    const rel = toPosix(path.posix.join(baseDir || '', normalized));
+    let filePath;
+    try {
+      filePath = resolveVaultPath(rel);
+    } catch {
+      continue;
+    }
+    try {
+      const data = await fs.readFile(filePath);
+      const mime = getMimeType(filePath);
+      img.setAttribute('src', `data:${mime};base64,${data.toString('base64')}`);
+    } catch {
+      // skip missing files
+    }
+  }
+  return document.body.innerHTML;
+}
+
+function buildExportStyles(themeName) {
+  const isDark = DARK_THEMES.has((themeName || '').toLowerCase());
+  const palette = isDark
+    ? {
+        background: '#0f1117',
+        text: '#e2e8f0',
+        muted: '#94a3b8',
+        border: '#2a2f3a',
+        codeBg: '#1b1f2a'
+      }
+    : {
+        background: '#ffffff',
+        text: '#1f2933',
+        muted: '#52606d',
+        border: '#e0e6ed',
+        codeBg: '#f5f7fb'
+      };
+  return `
+    body {
+      margin: 0;
+      padding: 32px;
+      font-family: "Space Grotesk", "Inter", system-ui, sans-serif;
+      background: ${palette.background};
+      color: ${palette.text};
+    }
+    .doc-title {
+      font-size: 28px;
+      margin: 0 0 24px;
+    }
+    .preview h1, .preview h2, .preview h3 { margin-top: 1.2em; }
+    .preview pre {
+      background: transparent;
+      padding: 0.15rem;
+      border-radius: 10px;
+      overflow-x: auto;
+    }
+    .preview pre code {
+      display: block;
+      padding: 0.85rem;
+      border-radius: 8px;
+      background: ${palette.codeBg};
+    }
+    .preview code:not(pre code) {
+      background: ${palette.codeBg};
+      padding: 0.15rem 0.3rem;
+      border-radius: 6px;
+    }
+    .preview table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 1rem 0;
+    }
+    .preview table th,
+    .preview table td {
+      border: 1px solid ${palette.border};
+      padding: 0.45rem 0.5rem;
+      text-align: left;
+    }
+    .preview img {
+      max-width: 100%;
+    }
+    .preview .mermaid {
+      margin: 1rem 0;
+    }
+  `;
+}
+
+function buildExportDocument(bodyHtml, title, themeName) {
+  const titleHtml = title ? `<h1 class="doc-title">${escapeHtml(title)}</h1>` : '';
+  const styles = buildExportStyles(themeName);
+  return `<!DOCTYPE html>
+  <html>
+    <head>
+      <meta charset="utf-8" />
+      <style>${styles}</style>
+    </head>
+    <body>
+      ${titleHtml}
+      <div class="preview">${bodyHtml}</div>
+    </body>
+  </html>`;
+}
+
+async function withMermaidPage(html, themeName, handler) {
+  const { puppeteer, mermaidPath } = loadExportDeps();
+  const browser = await puppeteer.launch({
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
+  });
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1200, height: 900 });
+    await page.setContent(html, { waitUntil: 'domcontentloaded' });
+    await page.addScriptTag({ path: mermaidPath });
+    await page.evaluate((theme) => {
+      mermaid.initialize({ startOnLoad: false, theme });
+      mermaid.init(undefined, document.querySelectorAll('.mermaid'));
+    }, themeName);
+    await page.waitForTimeout(50);
+    return await handler(page);
+  } finally {
+    await browser.close();
+  }
+}
+
+function extractMermaidBlocks(text) {
+  const blocks = [];
+  const regex = /```mermaid\s*([\s\S]*?)```/gi;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    blocks.push(match[1].trim());
+  }
+  return blocks;
+}
+
+function getBaseDir(relPath) {
+  const dir = toPosix(path.posix.dirname(relPath));
+  return dir === '.' ? '' : dir;
+}
+
+async function buildExportHtmlForNote(relPath, settings) {
+  const filePath = resolveVaultPath(relPath);
+  const content = await fs.readFile(filePath, 'utf8');
+  const baseDir = getBaseDir(relPath);
+  const title = extractFrontmatterTitle(content) || path.basename(relPath, path.extname(relPath));
+  const bodyHtml = renderMarkdownToHtmlForExport(content, baseDir);
+  const inlined = await inlineImages(bodyHtml, baseDir);
+  const themeName = settings.theme || DEFAULT_SETTINGS.theme;
+  const html = buildExportDocument(inlined, title, themeName);
+  return { html, content, title, baseDir, themeName };
 }
 
 function requireAuth(authUser) {
@@ -542,6 +837,34 @@ function buildApp() {
     }
   });
 
+  app.get('/api/calendar/changes', requireAuth(AUTH_USER), async (req, res) => {
+    const parsed = parseMonthParam((req.query.month || '').toString());
+    if (!parsed) return res.status(400).json({ error: 'month_required' });
+    const { year, month } = parsed;
+    try {
+      const files = await walkMarkdownFiles();
+      const changes = {};
+      for (const file of files) {
+        let stat;
+        try {
+          stat = await fs.stat(file.full);
+        } catch {
+          continue;
+        }
+        const mtime = stat.mtime;
+        if (mtime.getFullYear() !== year || mtime.getMonth() + 1 !== month) continue;
+        const dateStr = formatDateLocal(mtime);
+        if (!changes[dateStr]) changes[dateStr] = [];
+        if (changes[dateStr].length >= 50) continue;
+        changes[dateStr].push(file.rel);
+      }
+      Object.values(changes).forEach((list) => list.sort());
+      res.json({ month: `${year}-${String(month).padStart(2, '0')}`, changes });
+    } catch (err) {
+      res.status(500).json({ error: 'calendar_failed', message: err.message });
+    }
+  });
+
   app.post('/api/day', requireAuth(AUTH_USER), async (req, res) => {
     const { date, template } = req.body || {};
     if (!date) return res.status(400).json({ error: 'date_required' });
@@ -623,6 +946,110 @@ function buildApp() {
       res.json({ files: flat.slice(0, 2000) });
     } catch (err) {
       res.status(500).json({ error: 'files_failed', message: err.message });
+    }
+  });
+
+  app.get('/api/export/pdf', requireAuth(AUTH_USER), async (req, res) => {
+    if (!EXPORT_PDF_ENABLED) return res.status(404).json({ error: 'export_disabled' });
+    const rel = (req.query.path || '').toString();
+    if (!rel) return res.status(400).json({ error: 'path_required' });
+    try {
+      const settings = await loadSettings();
+      const { html, title, themeName } = await buildExportHtmlForNote(rel, settings);
+      const mermaidTheme = getMermaidTheme(themeName);
+      const pdfBuffer = await withMermaidPage(html, mermaidTheme, (page) =>
+        page.pdf({
+          format: EXPORT_PDF_PAGE_SIZE,
+          printBackground: true,
+          margin: {
+            top: EXPORT_PDF_MARGIN,
+            bottom: EXPORT_PDF_MARGIN,
+            left: EXPORT_PDF_MARGIN,
+            right: EXPORT_PDF_MARGIN
+          }
+        })
+      );
+      const filename = `${title || path.basename(rel, path.extname(rel))}.pdf`;
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.send(pdfBuffer);
+    } catch (err) {
+      res.status(500).json({ error: 'export_failed', message: err.message });
+    }
+  });
+
+  app.get('/api/export/docx', requireAuth(AUTH_USER), async (req, res) => {
+    if (!EXPORT_DOCX_ENABLED) return res.status(404).json({ error: 'export_disabled' });
+    const rel = (req.query.path || '').toString();
+    if (!rel) return res.status(400).json({ error: 'path_required' });
+    try {
+      const { htmlToDocx } = loadExportDeps();
+      const settings = await loadSettings();
+      const { html, title, themeName } = await buildExportHtmlForNote(rel, settings);
+      const mermaidTheme = getMermaidTheme(themeName);
+      const htmlWithMermaid = await withMermaidPage(html, mermaidTheme, (page) =>
+        page.evaluate(() => {
+          document.querySelectorAll('.mermaid').forEach((el) => {
+            const svg = el.querySelector('svg');
+            if (!svg) return;
+            const serialized = new XMLSerializer().serializeToString(svg);
+            const encoded = btoa(unescape(encodeURIComponent(serialized)));
+            const img = document.createElement('img');
+            img.setAttribute('src', `data:image/svg+xml;base64,${encoded}`);
+            img.setAttribute('alt', 'Mermaid diagram');
+            el.replaceWith(img);
+          });
+          document.querySelectorAll('script').forEach((el) => el.remove());
+          return document.documentElement.outerHTML;
+        })
+      );
+      const docxBuffer = await htmlToDocx(htmlWithMermaid);
+      const filename = `${title || path.basename(rel, path.extname(rel))}.docx`;
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.send(docxBuffer);
+    } catch (err) {
+      res.status(500).json({ error: 'export_failed', message: err.message });
+    }
+  });
+
+  app.get('/api/export/mermaid-image', requireAuth(AUTH_USER), async (req, res) => {
+    const rel = (req.query.path || '').toString();
+    const index = Number(req.query.index);
+    const format = (req.query.format || '').toString().toLowerCase();
+    if (!rel) return res.status(400).json({ error: 'path_required' });
+    if (!Number.isInteger(index) || index < 0) return res.status(400).json({ error: 'index_required' });
+    if (!['png', 'svg'].includes(format)) return res.status(400).json({ error: 'format_required' });
+    try {
+      const settings = await loadSettings();
+      const filePath = resolveVaultPath(rel);
+      const content = await fs.readFile(filePath, 'utf8');
+      const blocks = extractMermaidBlocks(content);
+      const block = blocks[index];
+      if (!block) return res.status(404).json({ error: 'diagram_not_found' });
+      const themeName = settings.theme || DEFAULT_SETTINGS.theme;
+      const mermaidTheme = getMermaidTheme(themeName);
+      const html = buildExportDocument(`<div class="mermaid">${escapeHtml(block)}</div>`, '', themeName);
+      const result = await withMermaidPage(html, mermaidTheme, async (page) => {
+        const svgHandle = await page.$('.mermaid svg');
+        if (!svgHandle) throw new Error('mermaid_render_failed');
+        if (format === 'svg') {
+          return page.evaluate(() => document.querySelector('.mermaid svg')?.outerHTML || '');
+        }
+        return svgHandle.screenshot({ type: 'png' });
+      });
+      const filename = `${path.basename(rel, path.extname(rel))}-diagram-${index + 1}.${format}`;
+      if (format === 'svg') {
+        res.setHeader('Content-Type', 'image/svg+xml');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.send(result);
+        return;
+      }
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.send(result);
+    } catch (err) {
+      res.status(500).json({ error: 'export_failed', message: err.message });
     }
   });
 

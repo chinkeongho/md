@@ -191,17 +191,75 @@
                 <input type="number" id="settings-search-limit" placeholder="1000" min="10">
               </div>
               <div class="settings-field">
+                <label class="settings-check">
+                  <input type="checkbox" id="settings-lint-enabled">
+                  Enable markdown lint
+                </label>
+              </div>
+              <div class="settings-field">
+                <label class="settings-check">
+                  <input type="checkbox" id="settings-lint-on-save">
+                  Auto-correct lint on save
+                </label>
+              </div>
+              <div class="settings-field">
+                <label class="settings-check">
+                  <input type="checkbox" id="settings-lint-no-blank-list">
+                  Disallow blank lines between list items
+                </label>
+              </div>
+              <div class="settings-field">
+                <label class="settings-check">
+                  <input type="checkbox" id="settings-lint-trim-trailing">
+                  Trim trailing whitespace
+                </label>
+              </div>
+              <div class="settings-field">
+                <label class="settings-check">
+                  <input type="checkbox" id="settings-lint-heading-levels">
+                  Enforce heading level consistency
+                </label>
+              </div>
+              <div class="settings-field">
                 <label for="settings-note-template">Note template (supports {{created}}, {{updated}}, {{date}}, {{title}})</label>
                 <textarea id="settings-note-template" rows="6" placeholder="---&#10;created: {{created}}&#10;updated: {{updated}}&#10;exercise:&#10;mood:&#10;code:&#10;---&#10;"></textarea>
               </div>
               <button id="settings-save">Save settings</button>
             </div>
           </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <span>Recent changes</span>
+            </div>
+            <div class="recent-controls">
+              <label class="recent-label" for="recent-sort">Sort</label>
+              <select id="recent-sort">
+                <option value="newest">Newest first</option>
+                <option value="oldest">Oldest first</option>
+                <option value="title">Title A → Z</option>
+              </select>
+            </div>
+            <ul id="recent-changes" class="list"></ul>
+          </div>
         </aside>
         <main class="editor-area">
           <div class="editor-toolbar">
-            <span id="unsaved-indicator" class="badge">Saved</span>
-            <span id="message" class="status"></span>
+            <div class="toolbar-status">
+              <span id="unsaved-indicator" class="badge">Saved</span>
+              <span id="message" class="status"></span>
+            </div>
+            <div class="toolbar-actions">
+              <span id="export-status" class="status"></span>
+              <button id="lint-btn" type="button">Lint</button>
+              <div class="export-menu">
+                <button id="export-btn" type="button" disabled>Export ▾</button>
+                <div id="export-menu" class="export-dropdown hidden">
+                  <button id="export-pdf-btn" type="button">Export PDF</button>
+                  <button id="export-docx-btn" type="button">Export DOCX</button>
+                </div>
+              </div>
+            </div>
           </div>
           <div id="replace-panel" class="replace-panel hidden">
             <div class="replace-row">
