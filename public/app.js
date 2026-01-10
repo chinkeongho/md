@@ -1,4 +1,14 @@
-mermaid.initialize({ startOnLoad: false });
+const DARK_THEMES = new Set(['midnight', 'dracula', 'monokai', 'solarized', 'tokyonight', 'nord', 'gruvbox', 'catppuccin']);
+
+function getMermaidTheme(themeName) {
+  return DARK_THEMES.has((themeName || '').toLowerCase()) ? 'dark' : 'default';
+}
+
+function updateMermaidTheme(themeName) {
+  mermaid.initialize({ startOnLoad: false, theme: getMermaidTheme(themeName) });
+}
+
+updateMermaidTheme('light');
 
 const state = {
   currentPath: null,
@@ -18,7 +28,8 @@ const state = {
   files: [],
   filePathSet: new Set(),
   suggest: { active: false, items: [], index: -1, query: '', mode: 'link', loading: false },
-  lastRenderedPreview: ''
+  lastRenderedPreview: '',
+  exporting: false
 };
 
 const els = {
@@ -92,7 +103,12 @@ const els = {
   replaceWith: document.getElementById('replace-with'),
   replaceApply: document.getElementById('replace-apply'),
   replaceCancel: document.getElementById('replace-cancel'),
-  replaceCount: document.getElementById('replace-count')
+  replaceCount: document.getElementById('replace-count'),
+  exportBtn: document.getElementById('export-btn'),
+  exportMenu: document.getElementById('export-menu'),
+  exportPdf: document.getElementById('export-pdf-btn'),
+  exportDocx: document.getElementById('export-docx-btn'),
+  exportStatus: document.getElementById('export-status')
 };
 
 function setMessage(msg, tone = 'muted') {
@@ -104,6 +120,18 @@ function setMessage(msg, tone = 'muted') {
     els.message.style.color = '#1d9d65';
   } else {
     els.message.style.color = '';
+  }
+}
+
+function setExportStatus(msg, tone = 'muted') {
+  if (!els.exportStatus) return;
+  els.exportStatus.textContent = msg || '';
+  if (tone === 'error') {
+    els.exportStatus.style.color = '#c0392b';
+  } else if (tone === 'success') {
+    els.exportStatus.style.color = '#1d9d65';
+  } else {
+    els.exportStatus.style.color = '';
   }
 }
 
@@ -167,6 +195,7 @@ function setCurrentPathDisplay(path) {
   els.currentPathInput.disabled = !hasPath;
   els.currentPathInput.value = hasPath ? path : '';
   els.currentPathInput.placeholder = hasPath ? '' : 'No file loaded';
+  if (els.exportBtn) els.exportBtn.disabled = !hasPath || state.exporting;
 }
 
 function pushHistory(path) {
@@ -350,7 +379,9 @@ function buildWeeklyPath(year, week) {
   return rel.replace(/^\/+/, '');
 }
 
-function createRenderer(baseDir) {
+function createRenderer(baseDir, opts = {}) {
+  const notePath = opts.notePath || '';
+  let mermaidIndex = 0;
   const renderer = new marked.Renderer();
   renderer.link = (href, title, text) => {
     if ((href || '').startsWith('vault-wiki://')) {
@@ -371,7 +402,17 @@ function createRenderer(baseDir) {
   };
   renderer.code = (code, lang) => {
     if ((lang || '').toLowerCase() === 'mermaid') {
-      return `<div class="mermaid">${escapeHtml(code)}</div>`;
+      const idx = mermaidIndex++;
+      const noteAttr = notePath ? ` data-note-path="${escapeAttr(notePath)}"` : '';
+      return `
+        <div class="mermaid-block" data-mermaid-index="${idx}"${noteAttr}>
+          <div class="mermaid">${escapeHtml(code)}</div>
+          <div class="mermaid-actions">
+            <button type="button" class="mermaid-action" data-format="png">Save diagram as PNG</button>
+            <button type="button" class="mermaid-action" data-format="svg">Save diagram as SVG</button>
+          </div>
+        </div>
+      `;
     }
     const highlighted = highlightCode(code, lang);
     const langClass = lang ? `language-${escapeAttr(lang)}` : '';
@@ -406,10 +447,10 @@ function highlightCode(code, lang) {
   return escapeHtml(code);
 }
 
-function renderPreview(text) {
-  if (text === state.lastRenderedPreview) return;
+function renderPreview(text, options = {}) {
+  if (!options.force && text === state.lastRenderedPreview) return;
   const baseDir = state.currentPath ? state.currentPath.split('/').slice(0, -1).join('/') : '';
-  const html = renderMarkdownToHtml(text || '', baseDir, true);
+  const html = renderMarkdownToHtml(text || '', baseDir, true, state.currentPath);
   els.preview.innerHTML = html;
   if (window.hljs) {
     els.preview.querySelectorAll('pre code').forEach((block) => hljs.highlightElement(block));
@@ -422,6 +463,7 @@ function renderPreview(text) {
       console.error('Mermaid render failed', err);
     }
   }
+  bindMermaidActions(els.preview, state.currentPath);
   bindLightbox();
   bindWikiLinks();
   hydrateEmbeds();
@@ -474,7 +516,43 @@ function bindWikiLinks() {
   });
 }
 
-function renderMarkdownToHtml(text, baseDir, allowEmbeds) {
+function bindMermaidActions(root, fallbackPath) {
+  if (!root) return;
+  root.querySelectorAll('.mermaid-action').forEach((btn) => {
+    if (btn.dataset.bound === 'true') return;
+    btn.dataset.bound = 'true';
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const format = btn.getAttribute('data-format');
+      const block = btn.closest('.mermaid-block');
+      const index = block ? Number(block.getAttribute('data-mermaid-index')) : NaN;
+      const notePath = block?.getAttribute('data-note-path') || fallbackPath || state.currentPath;
+      if (!notePath || Number.isNaN(index)) {
+        setMessage('Mermaid export unavailable', 'error');
+        return;
+      }
+      try {
+        const url = `/api/export/mermaid-image?path=${encodeURIComponent(notePath)}&index=${index}&format=${encodeURIComponent(format)}`;
+        const res = await fetch(url, { credentials: 'include' });
+        if (!res.ok) throw new Error('download_failed');
+        const blob = await res.blob();
+        const filename = `${notePath.split('/').pop()?.replace(/\.[^/.]+$/, '') || 'note'}-diagram-${index + 1}.${format}`;
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(link.href);
+      } catch (err) {
+        console.error(err);
+        setMessage('Mermaid download failed', 'error');
+      }
+    });
+  });
+}
+
+function renderMarkdownToHtml(text, baseDir, allowEmbeds, notePath) {
   marked.setOptions({
     gfm: true,
     breaks: true,
@@ -482,7 +560,7 @@ function renderMarkdownToHtml(text, baseDir, allowEmbeds) {
   });
   const stripped = stripFrontmatter(text);
   const preprocessed = preprocessWiki(stripped, baseDir, { allowEmbeds });
-  return marked.parse(preprocessed, { renderer: createRenderer(baseDir) });
+  return marked.parse(preprocessed, { renderer: createRenderer(baseDir, { notePath }) });
 }
 
 async function resolveWikiTargetClient(target) {
@@ -513,7 +591,7 @@ async function hydrateEmbeds() {
       } else {
         const data = await apiGet(`/api/file?path=${encodeURIComponent(resolved)}`);
         const embedBase = resolved.split('/').slice(0, -1).join('/');
-        contentEl.innerHTML = renderMarkdownToHtml(data.content || '', embedBase, false);
+        contentEl.innerHTML = renderMarkdownToHtml(data.content || '', embedBase, false, resolved);
         const mermaidBlocks = contentEl.querySelectorAll('.mermaid');
         if (mermaidBlocks.length) {
           try {
@@ -522,6 +600,7 @@ async function hydrateEmbeds() {
             console.error('Mermaid render failed (embed)', err);
           }
         }
+        bindMermaidActions(contentEl, resolved);
         if (window.hljs) {
           contentEl.querySelectorAll('pre code').forEach((block) => hljs.highlightElement(block));
         }
@@ -771,6 +850,55 @@ async function deleteNote() {
   }
 }
 
+function toggleExportMenu(open) {
+  if (!els.exportMenu) return;
+  const shouldOpen = typeof open === 'boolean' ? open : els.exportMenu.classList.contains('hidden');
+  els.exportMenu.classList.toggle('hidden', !shouldOpen);
+}
+
+function closeExportMenu() {
+  toggleExportMenu(false);
+}
+
+function extractDownloadName(res, fallback) {
+  const header = res.headers.get('Content-Disposition') || '';
+  const match = header.match(/filename="?([^";]+)"?/i);
+  return match ? match[1] : fallback;
+}
+
+async function exportNote(format) {
+  if (!state.currentPath || state.exporting) return;
+  state.exporting = true;
+  if (els.exportBtn) els.exportBtn.disabled = true;
+  setExportStatus(`Exporting ${format.toUpperCase()}...`);
+  closeExportMenu();
+  try {
+    const url = `/api/export/${format}?path=${encodeURIComponent(state.currentPath)}`;
+    const res = await fetch(url, { credentials: 'include' });
+    if (!res.ok) {
+      throw new Error('export_failed');
+    }
+    const blob = await res.blob();
+    const fallbackName = `${state.currentPath.split('/').pop()?.replace(/\.[^/.]+$/, '') || 'note'}.${format}`;
+    const filename = extractDownloadName(res, fallbackName);
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(link.href);
+    setExportStatus(`${format.toUpperCase()} exported`, 'success');
+    setTimeout(() => setExportStatus(''), 2000);
+  } catch (err) {
+    console.error(err);
+    setExportStatus(`${format.toUpperCase()} export failed`, 'error');
+  } finally {
+    state.exporting = false;
+    if (els.exportBtn) els.exportBtn.disabled = !state.currentPath;
+  }
+}
+
 els.saveBtn.addEventListener('click', saveFile);
 els.newBtn.addEventListener('click', newNote);
 els.renameBtn.addEventListener('click', renameNote);
@@ -786,6 +914,31 @@ els.backBtn.addEventListener('click', () => goHistory(-1));
 els.forwardBtn.addEventListener('click', () => goHistory(1));
 els.toggleSidebarBtn.addEventListener('click', () => {
   toggleSidebar();
+});
+if (els.exportBtn) {
+  els.exportBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (els.exportBtn.disabled) return;
+    toggleExportMenu();
+  });
+}
+if (els.exportPdf) {
+  els.exportPdf.addEventListener('click', (e) => {
+    e.stopPropagation();
+    exportNote('pdf');
+  });
+}
+if (els.exportDocx) {
+  els.exportDocx.addEventListener('click', (e) => {
+    e.stopPropagation();
+    exportNote('docx');
+  });
+}
+document.addEventListener('click', (e) => {
+  if (!els.exportMenu || !els.exportBtn) return;
+  if (!els.exportMenu.contains(e.target) && !els.exportBtn.contains(e.target)) {
+    closeExportMenu();
+  }
 });
 if (els.readmeBtn) els.readmeBtn.addEventListener('click', showProjectReadme);
 if (els.readmeClose) els.readmeClose.addEventListener('click', () => toggleReadme(false));
@@ -901,7 +1054,7 @@ async function loadHoverPreview(path, evt) {
   try {
     const data = await apiGet(`/api/file?path=${encodeURIComponent(path)}`);
     const baseDir = path.split('/').slice(0, -1).join('/');
-    const snippet = renderMarkdownToHtml((data.content || '').slice(0, 1200), baseDir, false);
+    const snippet = renderMarkdownToHtml((data.content || '').slice(0, 1200), baseDir, false, data.path);
     showHoverPreview(snippet, evt);
   } catch (err) {
     if (err.status === 404) {
@@ -1101,8 +1254,6 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
-const DARK_THEMES = new Set(['midnight', 'dracula', 'monokai', 'solarized', 'tokyonight', 'nord', 'gruvbox', 'catppuccin']);
-
 function applyTheme(theme) {
   document.body.setAttribute('data-theme', theme || 'light');
   const darkLink = document.getElementById('hljs-dark');
@@ -1112,6 +1263,7 @@ function applyTheme(theme) {
     darkLink.disabled = !useDark;
     lightLink.disabled = useDark;
   }
+  updateMermaidTheme(theme);
   try {
     localStorage.setItem('preferredTheme', theme || 'light');
   } catch {
@@ -1410,7 +1562,7 @@ async function moveNode(path) {
 async function showProjectReadme() {
   try {
     const data = await apiGet('/api/project-readme');
-    const html = renderMarkdownToHtml(data.content || '', '', true);
+    const html = renderMarkdownToHtml(data.content || '', '', true, '');
     els.readmeBody.innerHTML = html;
     if (window.hljs) {
       els.readmeBody.querySelectorAll('pre code').forEach((block) => hljs.highlightElement(block));
@@ -1557,6 +1709,7 @@ if (els.settingsTheme) {
     state.settings = state.settings || {};
     state.settings.theme = theme;
     applyTheme(theme);
+    renderPreview(els.editor.value, { force: true });
   });
 }
 

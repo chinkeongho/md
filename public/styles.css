@@ -624,10 +624,75 @@ form {
 .editor-toolbar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 1rem;
   padding: 0.75rem 1rem;
   border-bottom: 1px solid var(--border);
   background: var(--card);
+}
+
+.toolbar-status {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.export-menu {
+  position: relative;
+}
+
+.export-menu > button {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  padding: 0.45rem 0.85rem;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.export-menu > button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.export-dropdown {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.15);
+  padding: 0.35rem;
+  min-width: 160px;
+  z-index: 40;
+}
+
+.export-dropdown.hidden {
+  display: none;
+}
+
+.export-dropdown button {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  text-align: left;
+  padding: 0.45rem 0.6rem;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.export-dropdown button:hover {
+  background: var(--hover);
 }
 
 .replace-panel {
@@ -904,6 +969,41 @@ form {
   border-radius: 8px;
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.07);
   cursor: zoom-in;
+}
+
+.preview .mermaid-block {
+  margin: 1rem 0;
+  padding: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--code-bg);
+}
+
+.preview .mermaid-block svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.mermaid-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+}
+
+.mermaid-action {
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 0.25rem 0.55rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.mermaid-action:hover {
+  border-color: var(--accent);
+  color: var(--accent-2);
 }
 
 .embed-block {
