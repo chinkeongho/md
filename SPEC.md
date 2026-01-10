@@ -7,6 +7,13 @@ Add two capabilities to the markdown editor:
 
 This spec fits the existing single-user, self-hosted app. No plugin system or external SaaS dependence.
 
+## Feature Summary (Current)
+- Mermaid preview with theme-aware rendering, PNG/SVG export per diagram, and configurable Mermaid theme/font settings.
+- PDF/DOCX export with Mermaid rendered in-headless Chromium; export styling mirrors app preview.
+- Calendar change markers by day, hover previews, and a persistent day activity list with selectable files.
+- Day activity “Open selected” launches a multi-file preview list for quick inspection and open-in-editor.
+- Markdown linting with auto-fix rules (trim trailing whitespace, no blank lines between list items, max one blank line, heading level smoothing).
+
 ## Goals
 - Render Mermaid code blocks inline in the preview with accurate sizing and theme integration.
 - Provide a one-click export for PDF and DOCX that embeds Mermaid diagrams as images.
@@ -156,6 +163,9 @@ Add two capabilities:
 ### Calendar changes
 - Indicate calendar days with modified notes using a distinct marker.
 - On hover, show a list of modified notes for that day with clickable entries.
+- On click, open a “Day activity” panel listing files created or modified on that day.
+- Day activity list supports multi-select and quick actions: open, open in split, delete, move.
+- Show a count badge per day (excluding the daily note by default; toggle to include).
 
 ## Functional Requirements
 ### Markdown linting
@@ -167,6 +177,9 @@ Add two capabilities:
 - Provide an endpoint to return notes modified for a given month.
 - Use the local modification date (`mtime`) and return up to a safe cap per day.
 - UI pulls change data for the visible month and uses it for hover previews.
+- Provide an endpoint to return files created/modified for a single day.
+- Use `ctime` (created) and `mtime` (modified) for day activity listing.
+- Exclude the daily note by default; allow opt-in via a query flag.
 
 ## Error Handling
 - Linting errors should fail gracefully and never block saving.

@@ -7,6 +7,12 @@ Single-user web app to browse, view, and edit the Markdown knowledge base in `ze
 - Keep the experience light: fast load, minimal chrome, no plugin architecture.
 - Provide essentials Obsidian-style features I rely on (calendar, mermaid, tables) without extras.
 
+## Highlights
+- Theme-aware Mermaid preview with PNG/SVG export per diagram.
+- PDF/DOCX export that mirrors the preview styles.
+- Calendar with change markers, hover previews, and a day activity list for modified files.
+- Configurable linting and a replace-all panel for bulk edits.
+
 ## Functional Requirements
 - **Authentication**: Simple login form (username/password stored server-side, e.g., env/secret file). Single user is fine; no sign-up or invite flows.
 - **Vault location**: All notes live on disk under `zett/`; the app reads/writes directly to those files. No database required.
@@ -17,11 +23,11 @@ Single-user web app to browse, view, and edit the Markdown knowledge base in `ze
 - **Flat link resolution**: Wiki links resolve across the whole vault (first match by filename, even if in subfolders like `Daily/Note.md`).
 - **Navigation**: Back/Forward history with configurable shortcuts (default `Alt+ArrowLeft` / `Alt+ArrowRight`).
 - **Code blocks**: Syntax highlighting for fenced code (bash, python, etc.) using highlight.js.
-- **Calendar**: Calendar view to jump to notes by date (e.g., filenames or frontmatter with dates). Clicking a day should show/create that day’s note.
+- **Calendar**: Calendar view to jump to notes by date (e.g., filenames or frontmatter with dates). Clicking a day should show/create that day’s note and load a day activity list of modified files.
 - **Weekly calendar**: Week numbers appear alongside the calendar; clicking opens/creates `Weekly notes/YYYY-{W}WW.md` (folder/name configurable), and hovering days/weeks shows a quick preview of the note.
 - **File actions**: Create, rename, and delete notes in `zett/` (with confirmation). Folder creation optional but helpful.
 - **Search**: Text search across note contents (basic full-text or grep-style) to find and open matching files.
-- **Mermaid**: Render Mermaid flowcharts inline in the viewer/preview. Editing Mermaid as code is sufficient; live re-render on save or on-demand.
+- **Mermaid**: Render Mermaid flowcharts inline in the viewer/preview. Editing Mermaid as code is sufficient; live re-render on save or on-demand. Allow per-diagram PNG/SVG download.
 - **Tables**: Ensure Markdown tables render correctly in the viewer/preview; keep editing in plain Markdown.
 - **Attachments**: Preserve existing local links/embeds (images, PDFs) if present in `zett/`. Serving static assets from the vault is sufficient; no upload manager required. Inline image display with a simple lightbox/zoom is preferred for readability.
 - **Filename control**: Show the current note path at the top; it should be directly editable to rename the note (updates the underlying file).
@@ -31,6 +37,8 @@ Single-user web app to browse, view, and edit the Markdown knowledge base in `ze
 - **Autosuggest**: Typing `[[` or `![[` shows a floating suggestion box for files/images to auto-complete links/embeds.
 - **Themes**: Multiple themes (dark-first selector with Midnight, Dracula, Monokai, Solarized, Tokyo Night, Nord, Gruvbox, Catppuccin; plus light/paper variants) selectable in the theme picker above settings.
 - **Shortcuts**: Configurable shortcuts (save, history navigation, line move, multi-select, sidebar toggle).
+- **Export**: Export the current note as PDF or DOCX with Mermaid diagrams rendered.
+- **Linting**: Markdown lint with auto-fix rules (trailing whitespace, list spacing, max blank lines, heading levels).
 
 ## Non-Functional Requirements
 - **Deployment**: Self-hosted; runs locally or on a private server. Browser-based client only.
@@ -72,6 +80,8 @@ Single-user web app to browse, view, and edit the Markdown knowledge base in `ze
   - File sort order (default modified date, newest first).
   - Shortcut keys.
   - Theme (quick selector above settings) and search limit.
+  - Mermaid theme override, font size, and font family.
+  - Linting toggles (enable, on-save, and rule selection).
   - Replace-all panel (`Ctrl+Shift+D` by default) for multi-select style bulk edits.
 
 ## TODO

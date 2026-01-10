@@ -50,7 +50,11 @@ shortcutMultiSelectAll: 'Ctrl+Shift+D',
   lintOnSave: true,
   lintNoBlankList: true,
   lintTrimTrailing: true,
-  lintHeadingLevels: true
+  lintHeadingLevels: true,
+  mermaidTheme: 'auto',
+  mermaidFontSize: 14,
+  mermaidFontFamily: 'mono',
+  mermaidFontFamilyCustom: ''
 };
 
 const ALLOWED_SORT_ORDERS = ['mtime_desc', 'mtime_asc', 'name_asc', 'name_desc'];
@@ -70,6 +74,13 @@ const ALLOWED_THEMES = [
   'sand',
   'paper'
 ];
+const MERMAID_THEMES = ['auto', 'default', 'neutral', 'dark', 'forest', 'base'];
+const MERMAID_FONT_FAMILIES = ['auto', 'sans', 'serif', 'mono', 'custom'];
+const MERMAID_FONT_FAMILY_MAP = {
+  sans: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Arial, sans-serif',
+  serif: 'ui-serif, "Times New Roman", Times, serif',
+  mono: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
+};
 const DARK_THEMES = new Set(['midnight', 'dracula', 'monokai', 'solarized', 'tokyonight', 'nord', 'gruvbox', 'catppuccin']);
 const PROJECT_README = path.join(__dirname, 'README.md');
 
@@ -123,7 +134,36 @@ function getMermaidTheme(themeName) {
   return DARK_THEMES.has((themeName || '').toLowerCase()) ? 'dark' : 'default';
 }
 
+function resolveThemeOverride(raw, fallback) {
+  const theme = (raw || '').toString().toLowerCase();
+  if (ALLOWED_THEMES.includes(theme)) return theme;
+  return fallback || DEFAULT_SETTINGS.theme;
+}
+
+function resolveMermaidTheme(appTheme, override) {
+  const chosen = (override || '').toString().toLowerCase();
+  if (MERMAID_THEMES.includes(chosen) && chosen !== 'auto') return chosen;
+  return getMermaidTheme(appTheme);
+}
+
+function resolveMermaidFontSize(value) {
+  const size = Number(value);
+  if (!Number.isFinite(size)) return null;
+  const clamped = Math.min(Math.max(Math.round(size), 8), 32);
+  return clamped;
+}
+
+function resolveMermaidFontFamily(value, custom) {
+  const key = (value || '').toString().toLowerCase();
+  if (key === 'custom') {
+    const customValue = (custom || '').toString().trim();
+    return customValue || null;
+  }
+  return MERMAID_FONT_FAMILY_MAP[key] || null;
+}
+
 let exportDeps = null;
+let exportCssCache = null;
 
 function loadExportDeps() {
   if (exportDeps) return exportDeps;
@@ -139,6 +179,17 @@ function loadExportDeps() {
     err.message = `Export dependencies missing: ${err.message}`;
     throw err;
   }
+}
+
+async function loadExportCss() {
+  if (exportCssCache) return exportCssCache;
+  const cssPath = path.join(__dirname, 'public', 'styles.css');
+  try {
+    exportCssCache = await fs.readFile(cssPath, 'utf8');
+  } catch {
+    exportCssCache = '';
+  }
+  return exportCssCache;
 }
 
 async function loadSettings() {
@@ -210,6 +261,14 @@ function sanitizeSettings(partial = {}) {
   cleaned.lintNoBlankList = typeof merged.lintNoBlankList === 'boolean' ? merged.lintNoBlankList : DEFAULT_SETTINGS.lintNoBlankList;
   cleaned.lintTrimTrailing = typeof merged.lintTrimTrailing === 'boolean' ? merged.lintTrimTrailing : DEFAULT_SETTINGS.lintTrimTrailing;
   cleaned.lintHeadingLevels = typeof merged.lintHeadingLevels === 'boolean' ? merged.lintHeadingLevels : DEFAULT_SETTINGS.lintHeadingLevels;
+  cleaned.mermaidTheme = MERMAID_THEMES.includes((merged.mermaidTheme || '').toLowerCase())
+    ? merged.mermaidTheme.toLowerCase()
+    : DEFAULT_SETTINGS.mermaidTheme;
+  cleaned.mermaidFontSize = resolveMermaidFontSize(merged.mermaidFontSize) || DEFAULT_SETTINGS.mermaidFontSize;
+  cleaned.mermaidFontFamily = MERMAID_FONT_FAMILIES.includes((merged.mermaidFontFamily || '').toLowerCase())
+    ? merged.mermaidFontFamily.toLowerCase()
+    : DEFAULT_SETTINGS.mermaidFontFamily;
+  cleaned.mermaidFontFamilyCustom = typeof merged.mermaidFontFamilyCustom === 'string' ? merged.mermaidFontFamilyCustom : '';
   const allowedWeekStarts = ['monday', 'sunday'];
   cleaned.weekStartsOn = allowedWeekStarts.includes((merged.weekStartsOn || '').toLowerCase())
     ? merged.weekStartsOn.toLowerCase()
@@ -431,6 +490,18 @@ function parseMonthParam(raw) {
   return { year, month };
 }
 
+function parseDateParam(raw) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw || '');
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!year || month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const date = new Date(year, month - 1, day);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null;
+  return { year, month, day, date };
+}
+
 async function collectCalendarDates() {
   const mdFiles = await walkMarkdownFiles();
   const found = new Set();
@@ -552,90 +623,55 @@ async function inlineImages(html, baseDir) {
   return document.body.innerHTML;
 }
 
-function buildExportStyles(themeName) {
-  const isDark = DARK_THEMES.has((themeName || '').toLowerCase());
-  const palette = isDark
-    ? {
-        background: '#0f1117',
-        text: '#e2e8f0',
-        muted: '#94a3b8',
-        border: '#2a2f3a',
-        codeBg: '#1b1f2a'
-      }
-    : {
-        background: '#ffffff',
-        text: '#1f2933',
-        muted: '#52606d',
-        border: '#e0e6ed',
-        codeBg: '#f5f7fb'
-      };
+async function buildExportStyles(themeName) {
+  const baseCss = await loadExportCss();
   return `
+    ${baseCss}
     body {
       margin: 0;
       padding: 32px;
-      font-family: "Space Grotesk", "Inter", system-ui, sans-serif;
-      background: ${palette.background};
-      color: ${palette.text};
+      background: #ffffff !important;
+      background-image: none !important;
+      color: var(--text);
+      font-family: "Space Grotesk", "Noto Sans CJK SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+        "Source Han Sans SC", "Segoe UI", sans-serif;
+    }
+    body[data-theme] {
+      --bg: #ffffff;
+      --card: #ffffff;
     }
     .doc-title {
       font-size: 28px;
       margin: 0 0 24px;
     }
-    .preview h1, .preview h2, .preview h3 { margin-top: 1.2em; }
-    .preview pre {
-      background: transparent;
-      padding: 0.15rem;
-      border-radius: 10px;
-      overflow-x: auto;
-    }
-    .preview pre code {
-      display: block;
-      padding: 0.85rem;
-      border-radius: 8px;
-      background: ${palette.codeBg};
-    }
-    .preview code:not(pre code) {
-      background: ${palette.codeBg};
-      padding: 0.15rem 0.3rem;
-      border-radius: 6px;
-    }
-    .preview table {
-      border-collapse: collapse;
-      width: 100%;
-      margin: 1rem 0;
-    }
-    .preview table th,
-    .preview table td {
-      border: 1px solid ${palette.border};
-      padding: 0.45rem 0.5rem;
-      text-align: left;
+    .preview {
+      padding: 0;
+      background: var(--card);
     }
     .preview img {
-      max-width: 100%;
-    }
-    .preview .mermaid {
-      margin: 1rem 0;
+      box-shadow: none;
+      cursor: default;
     }
   `;
 }
 
-function buildExportDocument(bodyHtml, title, themeName) {
+async function buildExportDocument(bodyHtml, title, themeName) {
   const titleHtml = title ? `<h1 class="doc-title">${escapeHtml(title)}</h1>` : '';
-  const styles = buildExportStyles(themeName);
+  const styles = await buildExportStyles(themeName);
   return `<!DOCTYPE html>
   <html>
     <head>
       <meta charset="utf-8" />
       <style>${styles}</style>
     </head>
-    <body>
+    <body data-theme="${escapeAttr(themeName || '')}">
       ${titleHtml}
       <div class="preview">${bodyHtml}</div>
     </body>
   </html>`;
 }
 
-async function withMermaidPage(html, themeName, handler) {
+async function withMermaidPage(html, mermaidConfig, handler) {
   const { puppeteer, mermaidPath } = loadExportDeps();
   const browser = await puppeteer.launch({
     args: ['--no-sandbox', '--disable-setuid-sandbox']
@@ -645,11 +681,15 @@ async function withMermaidPage(html, themeName, handler) {
     await page.setViewport({ width: 1200, height: 900 });
     await page.setContent(html, { waitUntil: 'domcontentloaded' });
     await page.addScriptTag({ path: mermaidPath });
-    await page.evaluate((theme) => {
-      mermaid.initialize({ startOnLoad: false, theme });
+    await page.evaluate((config) => {
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: config.theme,
+        themeVariables: config.themeVariables || {}
+      });
       mermaid.init(undefined, document.querySelectorAll('.mermaid'));
-    }, themeName);
-    await page.waitForTimeout(50);
+    }, mermaidConfig);
+    await new Promise((resolve) => setTimeout(resolve, 50));
     return await handler(page);
   } finally {
     await browser.close();
@@ -666,20 +706,47 @@ function extractMermaidBlocks(text) {
   return blocks;
 }
 
+function normalizeWikiTarget(raw) {
+  const target = (raw || '').split('|')[0].trim();
+  return target.replace(/^[./]+/, '');
+}
+
+function normalizeMarkdownLink(raw) {
+  const target = (raw || '').trim();
+  if (!target) return null;
+  if (/^(https?:|mailto:|tel:|data:)/i.test(target)) return null;
+  const cleaned = target.split(/[?#]/)[0].trim();
+  if (!cleaned) return null;
+  return cleaned.replace(/^\/?vault\//, '').replace(/^[./]+/, '');
+}
+
+function isTargetMatch(targetBaseLower, candidate) {
+  if (!candidate) return false;
+  const base = path.posix.basename(candidate);
+  const noExt = base.replace(/\.[^/.]+$/, '');
+  return noExt.toLowerCase() === targetBaseLower;
+}
+
+function trimSnippet(line) {
+  const trimmed = (line || '').trim();
+  if (trimmed.length <= 160) return trimmed;
+  return `${trimmed.slice(0, 157)}...`;
+}
+
 function getBaseDir(relPath) {
   const dir = toPosix(path.posix.dirname(relPath));
   return dir === '.' ? '' : dir;
 }
 
-async function buildExportHtmlForNote(relPath, settings) {
+async function buildExportHtmlForNote(relPath, settings, themeOverride) {
   const filePath = resolveVaultPath(relPath);
   const content = await fs.readFile(filePath, 'utf8');
   const baseDir = getBaseDir(relPath);
   const title = extractFrontmatterTitle(content) || path.basename(relPath, path.extname(relPath));
   const bodyHtml = renderMarkdownToHtmlForExport(content, baseDir);
   const inlined = await inlineImages(bodyHtml, baseDir);
-  const themeName = settings.theme || DEFAULT_SETTINGS.theme;
-  const html = buildExportDocument(inlined, title, themeName);
+  const themeName = resolveThemeOverride(themeOverride, settings.theme || DEFAULT_SETTINGS.theme);
+  const html = await buildExportDocument(inlined, title, themeName);
   return { html, content, title, baseDir, themeName };
 }
 
@@ -865,6 +932,49 @@ function buildApp() {
     }
   });
 
+  app.get('/api/calendar/day-files', requireAuth(AUTH_USER), async (req, res) => {
+    const parsed = parseDateParam((req.query.date || '').toString());
+    if (!parsed) return res.status(400).json({ error: 'date_required' });
+    const includeDaily = String(req.query.includeDaily || '').toLowerCase() === 'true';
+    try {
+      const settings = await loadSettings();
+      const dailyPath = buildDailyPath(formatDateLocal(parsed.date), settings).toLowerCase();
+      const start = new Date(parsed.year, parsed.month - 1, parsed.day);
+      const end = new Date(parsed.year, parsed.month - 1, parsed.day + 1);
+      const files = await walkMarkdownFiles();
+      const entries = [];
+      for (const file of files) {
+        if (!includeDaily && file.rel.toLowerCase() === dailyPath) continue;
+        let stat;
+        try {
+          stat = await fs.stat(file.full);
+        } catch {
+          continue;
+        }
+        const created = stat.ctime >= start && stat.ctime < end;
+        const modified = stat.mtime >= start && stat.mtime < end;
+        if (!created && !modified) continue;
+        entries.push({
+          path: file.rel,
+          created,
+          modified,
+          ctime: stat.ctime.toISOString(),
+          mtime: stat.mtime.toISOString()
+        });
+      }
+      entries.sort((a, b) => {
+        const aTime = Math.max(new Date(a.mtime).getTime(), new Date(a.ctime).getTime());
+        const bTime = Math.max(new Date(b.mtime).getTime(), new Date(b.ctime).getTime());
+        if (aTime !== bTime) return bTime - aTime;
+        return a.path.localeCompare(b.path);
+      });
+      const limit = 200;
+      res.json({ date: formatDateLocal(parsed.date), files: entries.slice(0, limit) });
+    } catch (err) {
+      res.status(500).json({ error: 'calendar_failed', message: err.message });
+    }
+  });
+
   app.post('/api/day', requireAuth(AUTH_USER), async (req, res) => {
     const { date, template } = req.body || {};
     if (!date) return res.status(400).json({ error: 'date_required' });
@@ -955,9 +1065,23 @@ function buildApp() {
     if (!rel) return res.status(400).json({ error: 'path_required' });
     try {
       const settings = await loadSettings();
-      const { html, title, themeName } = await buildExportHtmlForNote(rel, settings);
-      const mermaidTheme = getMermaidTheme(themeName);
-      const pdfBuffer = await withMermaidPage(html, mermaidTheme, (page) =>
+      const themeOverride = (req.query.theme || '').toString();
+      const mermaidOverride = (req.query.mermaidTheme || '').toString();
+      const mermaidFontSize = req.query.mermaidFontSize;
+      const mermaidFontFamily = (req.query.mermaidFontFamily || '').toString();
+      const mermaidFontFamilyCustom = (req.query.mermaidFontFamilyCustom || '').toString();
+      const { html, title, themeName } = await buildExportHtmlForNote(rel, settings, themeOverride);
+      const mermaidTheme = resolveMermaidTheme(themeName, mermaidOverride || settings.mermaidTheme);
+      const themeVariables = {};
+      const fontSize = resolveMermaidFontSize(mermaidFontSize ?? settings.mermaidFontSize);
+      const fontFamily = resolveMermaidFontFamily(
+        mermaidFontFamily || settings.mermaidFontFamily,
+        mermaidFontFamilyCustom || settings.mermaidFontFamilyCustom
+      );
+      if (fontSize) themeVariables.fontSize = `${fontSize}px`;
+      if (fontFamily) themeVariables.fontFamily = fontFamily;
+      const mermaidConfig = { theme: mermaidTheme, themeVariables };
+      const pdfBuffer = await withMermaidPage(html, mermaidConfig, (page) =>
         page.pdf({
           format: EXPORT_PDF_PAGE_SIZE,
           printBackground: true,
@@ -985,9 +1109,23 @@ function buildApp() {
     try {
       const { htmlToDocx } = loadExportDeps();
       const settings = await loadSettings();
-      const { html, title, themeName } = await buildExportHtmlForNote(rel, settings);
-      const mermaidTheme = getMermaidTheme(themeName);
-      const htmlWithMermaid = await withMermaidPage(html, mermaidTheme, (page) =>
+      const themeOverride = (req.query.theme || '').toString();
+      const mermaidOverride = (req.query.mermaidTheme || '').toString();
+      const mermaidFontSize = req.query.mermaidFontSize;
+      const mermaidFontFamily = (req.query.mermaidFontFamily || '').toString();
+      const mermaidFontFamilyCustom = (req.query.mermaidFontFamilyCustom || '').toString();
+      const { html, title, themeName } = await buildExportHtmlForNote(rel, settings, themeOverride);
+      const mermaidTheme = resolveMermaidTheme(themeName, mermaidOverride || settings.mermaidTheme);
+      const themeVariables = {};
+      const fontSize = resolveMermaidFontSize(mermaidFontSize ?? settings.mermaidFontSize);
+      const fontFamily = resolveMermaidFontFamily(
+        mermaidFontFamily || settings.mermaidFontFamily,
+        mermaidFontFamilyCustom || settings.mermaidFontFamilyCustom
+      );
+      if (fontSize) themeVariables.fontSize = `${fontSize}px`;
+      if (fontFamily) themeVariables.fontFamily = fontFamily;
+      const mermaidConfig = { theme: mermaidTheme, themeVariables };
+      const htmlWithMermaid = await withMermaidPage(html, mermaidConfig, (page) =>
         page.evaluate(() => {
           document.querySelectorAll('.mermaid').forEach((el) => {
             const svg = el.querySelector('svg');
@@ -1022,15 +1160,29 @@ function buildApp() {
     if (!['png', 'svg'].includes(format)) return res.status(400).json({ error: 'format_required' });
     try {
       const settings = await loadSettings();
+      const themeOverride = (req.query.theme || '').toString();
+      const mermaidOverride = (req.query.mermaidTheme || '').toString();
+      const mermaidFontSize = req.query.mermaidFontSize;
+      const mermaidFontFamily = (req.query.mermaidFontFamily || '').toString();
+      const mermaidFontFamilyCustom = (req.query.mermaidFontFamilyCustom || '').toString();
       const filePath = resolveVaultPath(rel);
       const content = await fs.readFile(filePath, 'utf8');
       const blocks = extractMermaidBlocks(content);
       const block = blocks[index];
       if (!block) return res.status(404).json({ error: 'diagram_not_found' });
-      const themeName = settings.theme || DEFAULT_SETTINGS.theme;
-      const mermaidTheme = getMermaidTheme(themeName);
-      const html = buildExportDocument(`<div class="mermaid">${escapeHtml(block)}</div>`, '', themeName);
-      const result = await withMermaidPage(html, mermaidTheme, async (page) => {
+      const themeName = resolveThemeOverride(themeOverride, settings.theme || DEFAULT_SETTINGS.theme);
+      const mermaidTheme = resolveMermaidTheme(themeName, mermaidOverride || settings.mermaidTheme);
+      const html = await buildExportDocument(`<div class="mermaid">${escapeHtml(block)}</div>`, '', themeName);
+      const themeVariables = {};
+      const fontSize = resolveMermaidFontSize(mermaidFontSize ?? settings.mermaidFontSize);
+      const fontFamily = resolveMermaidFontFamily(
+        mermaidFontFamily || settings.mermaidFontFamily,
+        mermaidFontFamilyCustom || settings.mermaidFontFamilyCustom
+      );
+      if (fontSize) themeVariables.fontSize = `${fontSize}px`;
+      if (fontFamily) themeVariables.fontFamily = fontFamily;
+      const mermaidConfig = { theme: mermaidTheme, themeVariables };
+      const result = await withMermaidPage(html, mermaidConfig, async (page) => {
         const svgHandle = await page.$('.mermaid svg');
         if (!svgHandle) throw new Error('mermaid_render_failed');
         if (format === 'svg') {
@@ -1050,6 +1202,58 @@ function buildApp() {
       res.send(result);
     } catch (err) {
       res.status(500).json({ error: 'export_failed', message: err.message });
+    }
+  });
+
+  app.get('/api/backlinks', requireAuth(AUTH_USER), async (req, res) => {
+    const rel = (req.query.path || '').toString();
+    if (!rel) return res.status(400).json({ error: 'path_required' });
+    try {
+      resolveVaultPath(rel);
+      const targetBase = path.basename(rel, path.extname(rel)).toLowerCase();
+      const files = await walkMarkdownFiles();
+      const backlinks = [];
+      for (const file of files) {
+        if (file.rel === rel) continue;
+        let content;
+        try {
+          content = await fs.readFile(file.full, 'utf8');
+        } catch {
+          continue;
+        }
+        const lines = content.split('\n');
+        let snippet = '';
+        let matched = false;
+        for (const line of lines) {
+          if (matched) break;
+          const wikiRegex = /!?\[\[([^\]]+)\]\]/g;
+          let wikiMatch;
+          while ((wikiMatch = wikiRegex.exec(line)) !== null) {
+            const target = normalizeWikiTarget(wikiMatch[1]);
+            if (isTargetMatch(targetBase, target)) {
+              matched = true;
+              snippet = trimSnippet(line);
+              break;
+            }
+          }
+          if (matched) break;
+          const mdRegex = /\[[^\]]*\]\(([^)]+)\)/g;
+          let mdMatch;
+          while ((mdMatch = mdRegex.exec(line)) !== null) {
+            const target = normalizeMarkdownLink(mdMatch[1]);
+            if (isTargetMatch(targetBase, target)) {
+              matched = true;
+              snippet = trimSnippet(line);
+              break;
+            }
+          }
+        }
+        if (matched) backlinks.push({ path: file.rel, snippet });
+      }
+      backlinks.sort((a, b) => a.path.localeCompare(b.path));
+      res.json({ path: rel, backlinks });
+    } catch (err) {
+      res.status(500).json({ error: 'backlinks_failed', message: err.message });
     }
   });
 

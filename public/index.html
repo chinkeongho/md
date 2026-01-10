@@ -76,6 +76,25 @@
 
           <div class="panel">
             <div class="panel-header">
+              <span>Day activity</span>
+              <span class="status" id="day-activity-date">No day selected</span>
+            </div>
+            <div class="day-activity-controls">
+              <label class="checkbox">
+                <input type="checkbox" id="day-activity-include-daily">
+                Include daily note
+              </label>
+              <div class="day-activity-actions">
+                <button id="day-activity-select-all" type="button">Select all</button>
+                <button id="day-activity-clear" type="button">Clear</button>
+                <button id="day-activity-open" type="button">Open selected</button>
+              </div>
+            </div>
+            <ul id="day-activity-list" class="list"></ul>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
               <span>Search</span>
               <span class="status" id="search-status"></span>
             </div>
@@ -120,6 +139,32 @@
                 <option value="sand">Sand</option>
                 <option value="paper">Paper</option>
               </select>
+            </div>
+            <div class="settings-field">
+              <label for="settings-mermaid-theme">Mermaid theme</label>
+              <select id="settings-mermaid-theme">
+                <option value="auto">Auto (match app theme)</option>
+                <option value="default">Default</option>
+                <option value="neutral">Neutral</option>
+                <option value="dark">Dark</option>
+                <option value="forest">Forest</option>
+                <option value="base">Base</option>
+              </select>
+            </div>
+            <div class="settings-field">
+              <label for="settings-mermaid-font-size">Mermaid font size (px)</label>
+              <input id="settings-mermaid-font-size" type="number" min="8" max="32" step="1" placeholder="14">
+            </div>
+            <div class="settings-field">
+              <label for="settings-mermaid-font-family">Mermaid font family</label>
+              <select id="settings-mermaid-font-family">
+                <option value="auto">Auto (Mermaid default)</option>
+                <option value="sans">System sans</option>
+                <option value="serif">System serif</option>
+                <option value="mono">System mono</option>
+                <option value="custom">Custom</option>
+              </select>
+              <input id="settings-mermaid-font-family-custom" type="text" placeholder="e.g. IBM Plex Mono, monospace">
             </div>
             <div id="settings-body" class="settings-body hidden">
               <div class="settings-field">
@@ -308,6 +353,23 @@
           <button id="readme-close">Close</button>
         </div>
         <div id="readme-body" class="modal-body preview"></div>
+      </div>
+    </div>
+
+    <div id="day-activity-modal" class="modal hidden">
+      <div class="modal-content day-activity-modal">
+        <div class="modal-header">
+          <h2>Day Activity</h2>
+          <button id="day-activity-modal-close">Close</button>
+        </div>
+        <div class="modal-body day-activity-modal-body">
+          <div class="day-activity-modal-list">
+            <ul id="day-activity-modal-list" class="list"></ul>
+          </div>
+          <div class="day-activity-modal-preview preview" id="day-activity-modal-preview">
+            <div class="status">Select a file to preview</div>
+          </div>
+        </div>
       </div>
     </div>
   </div>

@@ -1,14 +1,58 @@
 const DARK_THEMES = new Set(['midnight', 'dracula', 'monokai', 'solarized', 'tokyonight', 'nord', 'gruvbox', 'catppuccin']);
+const MERMAID_THEMES = new Set(['auto', 'default', 'neutral', 'dark', 'forest', 'base']);
+const MERMAID_FONT_FAMILIES = {
+  sans: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Arial, sans-serif',
+  serif: 'ui-serif, "Times New Roman", Times, serif',
+  mono: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
+};
 
-function getMermaidTheme(themeName) {
-  return DARK_THEMES.has((themeName || '').toLowerCase()) ? 'dark' : 'default';
+function resolveMermaidTheme(appTheme, override) {
+  const chosen = (override || '').toLowerCase();
+  if (MERMAID_THEMES.has(chosen) && chosen !== 'auto') return chosen;
+  return DARK_THEMES.has((appTheme || '').toLowerCase()) ? 'dark' : 'default';
 }
 
-function updateMermaidTheme(themeName) {
-  mermaid.initialize({ startOnLoad: false, theme: getMermaidTheme(themeName) });
+function resolveMermaidFontSize(value) {
+  const size = Number(value);
+  if (!Number.isFinite(size)) return null;
+  return Math.min(Math.max(Math.round(size), 8), 32);
+}
+
+function resolveMermaidFontFamily(value, customValue) {
+  const key = (value || '').toLowerCase();
+  if (key === 'custom') {
+    const custom = (customValue || '').trim();
+    return custom || null;
+  }
+  return MERMAID_FONT_FAMILIES[key] || null;
+}
+
+function updateMermaidTheme(appTheme, override, fontSize, fontFamily, fontFamilyCustom) {
+  const theme = resolveMermaidTheme(appTheme, override);
+  const themeVariables = {};
+  const resolvedFamily = resolveMermaidFontFamily(fontFamily, fontFamilyCustom);
+  const resolvedSize = resolveMermaidFontSize(fontSize);
+  if (resolvedFamily) themeVariables.fontFamily = resolvedFamily;
+  if (resolvedSize) themeVariables.fontSize = `${resolvedSize}px`;
+  mermaid.initialize({ startOnLoad: false, theme, themeVariables });
 }
 
 updateMermaidTheme('light');
+
+function rerenderMermaid(root) {
+  const mermaidBlocks = root ? root.querySelectorAll('.mermaid') : [];
+  if (!mermaidBlocks.length) return;
+  mermaidBlocks.forEach((block) => {
+    block.removeAttribute('data-processed');
+    const svg = block.querySelector('svg');
+    if (svg) svg.remove();
+  });
+  try {
+    mermaid.init(undefined, mermaidBlocks);
+  } catch (err) {
+    console.error('Mermaid render failed', err);
+  }
+}
 
 const state = {
   currentPath: null,
@@ -19,6 +63,7 @@ const state = {
   calendarWeeks: new Set(),
   calendarChanges: {},
   recentChanges: [],
+  dayActivity: { date: null, files: [], selected: new Set(), includeDaily: false },
   hoverBound: false,
   lightboxBound: false,
   settings: {},
@@ -118,6 +163,20 @@ const els = {
   settingsLintNoBlankList: document.getElementById('settings-lint-no-blank-list'),
   settingsLintTrimTrailing: document.getElementById('settings-lint-trim-trailing'),
   settingsLintHeadingLevels: document.getElementById('settings-lint-heading-levels'),
+  settingsMermaidTheme: document.getElementById('settings-mermaid-theme'),
+  settingsMermaidFontSize: document.getElementById('settings-mermaid-font-size'),
+  settingsMermaidFontFamily: document.getElementById('settings-mermaid-font-family'),
+  settingsMermaidFontFamilyCustom: document.getElementById('settings-mermaid-font-family-custom'),
+  dayActivityDate: document.getElementById('day-activity-date'),
+  dayActivityIncludeDaily: document.getElementById('day-activity-include-daily'),
+  dayActivitySelectAll: document.getElementById('day-activity-select-all'),
+  dayActivityClear: document.getElementById('day-activity-clear'),
+  dayActivityOpen: document.getElementById('day-activity-open'),
+  dayActivityList: document.getElementById('day-activity-list'),
+  dayActivityModal: document.getElementById('day-activity-modal'),
+  dayActivityModalClose: document.getElementById('day-activity-modal-close'),
+  dayActivityModalList: document.getElementById('day-activity-modal-list'),
+  dayActivityModalPreview: document.getElementById('day-activity-modal-preview'),
   recentChanges: document.getElementById('recent-changes'),
   recentSort: document.getElementById('recent-sort')
 };
@@ -478,6 +537,21 @@ function isListItemLine(line) {
 function lintMarkdown(text, options = {}) {
   const lines = (text || '').split('\n');
   const issues = [];
+  if (options.maxBlankLines) {
+    let blankRun = 0;
+    for (let i = 0; i < lines.length; i += 1) {
+      if (lines[i].trim() === '') {
+        blankRun += 1;
+        if (blankRun > 1) {
+          lines.splice(i, 1);
+          issues.push({ line: i + 1, rule: 'max-blank-lines' });
+          i -= 1;
+        }
+      } else {
+        blankRun = 0;
+      }
+    }
+  }
   if (options.trimTrailing) {
     lines.forEach((line, idx) => {
       const trimmed = line.replace(/\s+$/g, '');
@@ -523,9 +597,28 @@ function getLintOptions() {
     enabled: state.settings.lintEnabled !== false,
     onSave: state.settings.lintOnSave !== false,
     noBlankList: state.settings.lintNoBlankList !== false,
+    maxBlankLines: true,
     trimTrailing: state.settings.lintTrimTrailing !== false,
     headingLevels: state.settings.lintHeadingLevels !== false
   };
+}
+
+function formatLintSummary(issues = []) {
+  if (!issues.length) return '';
+  const labels = {
+    'trim-trailing': 'trim-trailing',
+    'no-blank-list': 'no-blank-list',
+    'heading-levels': 'heading-levels',
+    'max-blank-lines': 'max-blank-lines'
+  };
+  const counts = issues.reduce((acc, issue) => {
+    const key = labels[issue.rule] || issue.rule || 'other';
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  return Object.entries(counts)
+    .map(([rule, count]) => `${rule}:${count}`)
+    .join(', ');
 }
 
 function runLint({ showMessage = true } = {}) {
@@ -545,7 +638,9 @@ function runLint({ showMessage = true } = {}) {
     if (!result.issues.length) {
       setMessage('No lint issues found', 'success');
     } else {
-      setMessage(`Applied ${result.issues.length} lint fix${result.issues.length === 1 ? '' : 'es'}`, 'success');
+      const summary = formatLintSummary(result.issues);
+      const details = summary ? ` (${summary})` : '';
+      setMessage(`Applied ${result.issues.length} lint fix${result.issues.length === 1 ? '' : 'es'}${details}`, 'success');
     }
   }
   return { applied: changed, issues: result.issues };
@@ -559,18 +654,12 @@ function renderPreview(text, options = {}) {
   if (window.hljs) {
     els.preview.querySelectorAll('pre code').forEach((block) => hljs.highlightElement(block));
   }
-  const mermaidBlocks = els.preview.querySelectorAll('.mermaid');
-  if (mermaidBlocks.length) {
-    try {
-      mermaid.init(undefined, mermaidBlocks);
-    } catch (err) {
-      console.error('Mermaid render failed', err);
-    }
-  }
+  rerenderMermaid(els.preview);
   bindMermaidActions(els.preview, state.currentPath);
   bindLightbox();
   bindWikiLinks();
   hydrateEmbeds();
+  renderBacklinks(state.currentPath);
   state.lastRenderedPreview = text;
 }
 
@@ -636,7 +725,18 @@ function bindMermaidActions(root, fallbackPath) {
         return;
       }
       try {
-        const url = `/api/export/mermaid-image?path=${encodeURIComponent(notePath)}&index=${index}&format=${encodeURIComponent(format)}`;
+        const theme = state.settings.theme || 'light';
+        const mermaidTheme = state.settings.mermaidTheme || 'auto';
+        const mermaidFontSize = state.settings.mermaidFontSize ?? '';
+        const mermaidFontFamily = state.settings.mermaidFontFamily || 'auto';
+        const mermaidFontFamilyCustom = state.settings.mermaidFontFamilyCustom || '';
+        const url = `/api/export/mermaid-image?path=${encodeURIComponent(notePath)}&index=${index}&format=${encodeURIComponent(
+          format
+        )}&theme=${encodeURIComponent(theme)}&mermaidTheme=${encodeURIComponent(
+          mermaidTheme
+        )}&mermaidFontSize=${encodeURIComponent(mermaidFontSize)}&mermaidFontFamily=${encodeURIComponent(
+          mermaidFontFamily
+        )}&mermaidFontFamilyCustom=${encodeURIComponent(mermaidFontFamilyCustom)}`;
         const res = await fetch(url, { credentials: 'include' });
         if (!res.ok) throw new Error('download_failed');
         const blob = await res.blob();
@@ -696,14 +796,7 @@ async function hydrateEmbeds() {
         const data = await apiGet(`/api/file?path=${encodeURIComponent(resolved)}`);
         const embedBase = resolved.split('/').slice(0, -1).join('/');
         contentEl.innerHTML = renderMarkdownToHtml(data.content || '', embedBase, false, resolved);
-        const mermaidBlocks = contentEl.querySelectorAll('.mermaid');
-        if (mermaidBlocks.length) {
-          try {
-            mermaid.init(undefined, mermaidBlocks);
-          } catch (err) {
-            console.error('Mermaid render failed (embed)', err);
-          }
-        }
+        rerenderMermaid(contentEl);
         bindMermaidActions(contentEl, resolved);
         if (window.hljs) {
           contentEl.querySelectorAll('pre code').forEach((block) => hljs.highlightElement(block));
@@ -982,7 +1075,18 @@ async function exportNote(format) {
   setExportStatus(`Exporting ${format.toUpperCase()}...`);
   closeExportMenu();
   try {
-    const url = `/api/export/${format}?path=${encodeURIComponent(state.currentPath)}`;
+    const theme = state.settings.theme || 'light';
+    const mermaidTheme = state.settings.mermaidTheme || 'auto';
+    const mermaidFontSize = state.settings.mermaidFontSize ?? '';
+    const mermaidFontFamily = state.settings.mermaidFontFamily || 'auto';
+    const mermaidFontFamilyCustom = state.settings.mermaidFontFamilyCustom || '';
+    const url = `/api/export/${format}?path=${encodeURIComponent(state.currentPath)}&theme=${encodeURIComponent(
+      theme
+    )}&mermaidTheme=${encodeURIComponent(mermaidTheme)}&mermaidFontSize=${encodeURIComponent(
+      mermaidFontSize
+    )}&mermaidFontFamily=${encodeURIComponent(mermaidFontFamily)}&mermaidFontFamilyCustom=${encodeURIComponent(
+      mermaidFontFamilyCustom
+    )}`;
     const res = await fetch(url, { credentials: 'include' });
     if (!res.ok) {
       throw new Error('export_failed');
@@ -1226,6 +1330,211 @@ function renderRecentChanges() {
   }
 }
 
+function formatActivityMeta(item) {
+  const labels = [];
+  if (item.created) labels.push('created');
+  if (item.modified) labels.push('modified');
+  if (!labels.length) labels.push('changed');
+  return labels.join(', ');
+}
+
+function renderDayActivity() {
+  if (!els.dayActivityList || !els.dayActivityDate) return;
+  const { date, files, selected, includeDaily } = state.dayActivity || {};
+  els.dayActivityDate.textContent = date || 'No day selected';
+  if (els.dayActivityIncludeDaily) {
+    els.dayActivityIncludeDaily.checked = !!includeDaily;
+  }
+  els.dayActivityList.innerHTML = '';
+  if (!date) {
+    const li = document.createElement('li');
+    li.className = 'status';
+    li.textContent = 'Select a day to see changes';
+    els.dayActivityList.appendChild(li);
+    return;
+  }
+  if (!files || !files.length) {
+    const li = document.createElement('li');
+    li.className = 'status';
+    li.textContent = 'No modified files';
+    els.dayActivityList.appendChild(li);
+    return;
+  }
+  files.forEach((item) => {
+    const li = document.createElement('li');
+    li.className = 'day-activity-item';
+    const checked = selected && selected.has(item.path);
+    li.innerHTML = `
+      <label>
+        <input type="checkbox" ${checked ? 'checked' : ''} data-activity-path="${escapeAttr(item.path)}">
+        <span class="day-activity-title">${escapeHtml(item.path)}</span>
+      </label>
+      <span class="day-activity-meta">${escapeHtml(formatActivityMeta(item))}</span>
+      <button type="button" class="day-activity-open-one" data-open-path="${escapeAttr(item.path)}">Open</button>
+    `;
+    li.querySelector('input[type="checkbox"]')?.addEventListener('change', (e) => {
+      const path = e.target.getAttribute('data-activity-path');
+      if (!path) return;
+      if (!state.dayActivity.selected) state.dayActivity.selected = new Set();
+      if (e.target.checked) {
+        state.dayActivity.selected.add(path);
+      } else {
+        state.dayActivity.selected.delete(path);
+      }
+    });
+    li.querySelector('.day-activity-open-one')?.addEventListener('click', () => openFile(item.path));
+    els.dayActivityList.appendChild(li);
+  });
+}
+
+async function loadDayActivity(dateStr) {
+  if (!els.dayActivityList) return;
+  try {
+    const includeDaily = !!state.dayActivity.includeDaily;
+    const data = await apiGet(
+      `/api/calendar/day-files?date=${encodeURIComponent(dateStr)}&includeDaily=${includeDaily ? 'true' : 'false'}`
+    );
+    const nextSelected = new Set();
+    if (state.dayActivity.date === dateStr && state.dayActivity.selected) {
+      state.dayActivity.selected.forEach((path) => nextSelected.add(path));
+    }
+    state.dayActivity = {
+      date: data.date || dateStr,
+      files: data.files || [],
+      selected: nextSelected,
+      includeDaily
+    };
+    renderDayActivity();
+  } catch (err) {
+    console.error('Day activity failed', err);
+    state.dayActivity = { date: dateStr, files: [], selected: new Set(), includeDaily: state.dayActivity.includeDaily };
+    renderDayActivity();
+  }
+}
+
+function toggleDayActivityModal(open) {
+  if (!els.dayActivityModal) return;
+  const shouldOpen = typeof open === 'boolean' ? open : els.dayActivityModal.classList.contains('hidden');
+  els.dayActivityModal.classList.toggle('hidden', !shouldOpen);
+}
+
+function renderDayActivityModalList(paths, activePath) {
+  if (!els.dayActivityModalList) return;
+  els.dayActivityModalList.innerHTML = '';
+  if (!paths.length) {
+    const li = document.createElement('li');
+    li.className = 'status';
+    li.textContent = 'No files selected';
+    els.dayActivityModalList.appendChild(li);
+    return;
+  }
+  paths.forEach((path) => {
+    const li = document.createElement('li');
+    li.className = `day-activity-modal-item${path === activePath ? ' active' : ''}`;
+    li.innerHTML = `
+      <button type="button" class="day-activity-modal-link" data-preview-path="${escapeAttr(path)}">
+        ${escapeHtml(path)}
+      </button>
+      <button type="button" class="day-activity-open-one" data-open-path="${escapeAttr(path)}">Open</button>
+    `;
+    li.querySelector('.day-activity-modal-link')?.addEventListener('click', () => {
+      renderDayActivityPreview(path, paths);
+    });
+    li.querySelector('.day-activity-open-one')?.addEventListener('click', () => {
+      openFile(path);
+      toggleDayActivityModal(false);
+    });
+    els.dayActivityModalList.appendChild(li);
+  });
+}
+
+async function renderDayActivityPreview(path, paths) {
+  if (!els.dayActivityModalPreview) return;
+  try {
+    const data = await apiGet(`/api/file?path=${encodeURIComponent(path)}`);
+    const baseDir = path.split('/').slice(0, -1).join('/');
+    els.dayActivityModalPreview.innerHTML = renderMarkdownToHtml(data.content || '', baseDir, true, data.path);
+    if (window.hljs) {
+      els.dayActivityModalPreview.querySelectorAll('pre code').forEach((block) => hljs.highlightElement(block));
+    }
+    rerenderMermaid(els.dayActivityModalPreview);
+    bindMermaidActions(els.dayActivityModalPreview, path);
+    bindWikiLinks();
+    renderDayActivityModalList(paths, path);
+  } catch (err) {
+    els.dayActivityModalPreview.innerHTML = '<div class="status">Preview unavailable</div>';
+    console.error('Day activity preview failed', err);
+  }
+}
+
+async function renderBacklinks(currentPath) {
+  if (!els.preview) return;
+  const existing = els.preview.querySelector('.backlinks');
+  if (existing) existing.remove();
+  if (!currentPath) return;
+  const container = document.createElement('div');
+  container.className = 'backlinks';
+  container.innerHTML = `
+    <div class="backlinks-title">Linked from</div>
+    <div class="backlinks-body">
+      <div class="status">Loading backlinks...</div>
+    </div>
+  `;
+  els.preview.appendChild(container);
+  try {
+    const data = await apiGet(`/api/backlinks?path=${encodeURIComponent(currentPath)}`);
+    if (state.currentPath !== currentPath) return;
+    const backlinks = data.backlinks || [];
+    const body = container.querySelector('.backlinks-body');
+    if (!body) return;
+    if (!backlinks.length) {
+      body.innerHTML = '<div class="status">No backlinks</div>';
+      return;
+    }
+    const limit = 50;
+    let expanded = false;
+    const renderList = () => {
+      const items = expanded ? backlinks : backlinks.slice(0, limit);
+      const listHtml = items
+        .map(
+          (item) => `
+            <li class="backlinks-item">
+              <button type="button" class="backlinks-link" data-open-path="${escapeAttr(item.path)}">
+                ${escapeHtml(item.path)}
+              </button>
+              ${item.snippet ? `<div class="backlinks-snippet">${escapeHtml(item.snippet)}</div>` : ''}
+            </li>
+          `
+        )
+        .join('');
+      const moreBtn =
+        backlinks.length > limit
+          ? `<button type="button" class="backlinks-toggle">${expanded ? 'Show less' : `Show more (${backlinks.length - limit})`}</button>`
+          : '';
+      body.innerHTML = `
+        <ul class="backlinks-list">${listHtml}</ul>
+        ${moreBtn}
+      `;
+      body.querySelectorAll('.backlinks-link').forEach((btn) => {
+        btn.addEventListener('click', () => openFile(btn.getAttribute('data-open-path')));
+      });
+      const toggle = body.querySelector('.backlinks-toggle');
+      if (toggle) {
+        toggle.addEventListener('click', () => {
+          expanded = !expanded;
+          renderList();
+        });
+      }
+    };
+    renderList();
+  } catch (err) {
+    if (state.currentPath !== currentPath) return;
+    const body = container.querySelector('.backlinks-body');
+    if (body) body.innerHTML = '<div class="status">Backlinks unavailable</div>';
+    console.error('Backlinks failed', err);
+  }
+}
+
 function showHoverPreview(html, evt) {
   if (!els.hoverPreview || !els.hoverPreviewContent) return;
   els.hoverPreviewContent.innerHTML = html;
@@ -1376,6 +1685,7 @@ async function openDay(dateStr) {
     const data = await apiPost('/api/day', { date: dateStr });
     await openFile(data.path);
     await loadCalendarDates();
+    await loadDayActivity(dateStr);
   } catch (err) {
     setMessage('Could not open day note', 'error');
     console.error(err);
@@ -1499,7 +1809,13 @@ function applyTheme(theme) {
     darkLink.disabled = !useDark;
     lightLink.disabled = useDark;
   }
-  updateMermaidTheme(theme);
+  updateMermaidTheme(
+    theme,
+    state.settings.mermaidTheme,
+    state.settings.mermaidFontSize,
+    state.settings.mermaidFontFamily,
+    state.settings.mermaidFontFamilyCustom
+  );
   try {
     localStorage.setItem('preferredTheme', theme || 'light');
   } catch {
@@ -1887,6 +2203,27 @@ async function loadSettings() {
     if (els.settingsShortcutMultiSelectAll) els.settingsShortcutMultiSelectAll.value = state.settings.shortcutMultiSelectAll || 'Ctrl+Shift+D';
     if (els.settingsShortcutToggle) els.settingsShortcutToggle.value = state.settings.shortcutToggleSidebar || 'Alt+S';
     if (els.settingsTheme) els.settingsTheme.value = state.settings.theme || 'light';
+    if (els.settingsMermaidTheme) {
+      const mermaidTheme = MERMAID_THEMES.has((state.settings.mermaidTheme || '').toLowerCase())
+        ? state.settings.mermaidTheme
+        : 'auto';
+      els.settingsMermaidTheme.value = mermaidTheme;
+    }
+    if (els.settingsMermaidFontSize) {
+      const size = Number(state.settings.mermaidFontSize);
+      els.settingsMermaidFontSize.value = Number.isFinite(size) ? String(size) : '';
+    }
+    if (els.settingsMermaidFontFamily) {
+      const family = (state.settings.mermaidFontFamily || '').toLowerCase();
+      const resolved = ['auto', 'sans', 'serif', 'mono', 'custom'].includes(family) ? family : 'auto';
+      els.settingsMermaidFontFamily.value = resolved;
+    }
+    if (els.settingsMermaidFontFamilyCustom) {
+      els.settingsMermaidFontFamilyCustom.value = state.settings.mermaidFontFamilyCustom || '';
+    }
+    if (els.settingsMermaidFontFamilyCustom && els.settingsMermaidFontFamily) {
+      els.settingsMermaidFontFamilyCustom.disabled = els.settingsMermaidFontFamily.value !== 'custom';
+    }
     if (els.settingsNoteTemplate) els.settingsNoteTemplate.value = state.settings.noteTemplate || '';
     if (els.settingsSearchLimit) els.settingsSearchLimit.value = state.settings.searchLimit || 1000;
     if (els.settingsLintEnabled) els.settingsLintEnabled.checked = state.settings.lintEnabled !== false;
@@ -1919,6 +2256,11 @@ async function saveSettings() {
       shortcutMultiSelect: els.settingsShortcutMultiSelect.value,
       shortcutMultiSelectAll: els.settingsShortcutMultiSelectAll.value,
       shortcutToggleSidebar: els.settingsShortcutToggle.value,
+      theme: els.settingsTheme?.value || 'light',
+      mermaidTheme: els.settingsMermaidTheme?.value || 'auto',
+      mermaidFontSize: els.settingsMermaidFontSize?.value ? Number(els.settingsMermaidFontSize.value) : undefined,
+      mermaidFontFamily: els.settingsMermaidFontFamily?.value || 'auto',
+      mermaidFontFamilyCustom: els.settingsMermaidFontFamilyCustom?.value || '',
       noteTemplate: els.settingsNoteTemplate.value,
       searchLimit: Number(els.settingsSearchLimit.value) || undefined,
       lintEnabled: !!els.settingsLintEnabled?.checked,
@@ -1959,6 +2301,73 @@ if (els.settingsTheme) {
   });
 }
 
+if (els.settingsMermaidTheme) {
+  els.settingsMermaidTheme.addEventListener('change', (e) => {
+    const theme = e.target.value;
+    state.settings = state.settings || {};
+    state.settings.mermaidTheme = theme;
+    updateMermaidTheme(
+      state.settings.theme || 'light',
+      theme,
+      state.settings.mermaidFontSize,
+      state.settings.mermaidFontFamily,
+      state.settings.mermaidFontFamilyCustom
+    );
+    renderPreview(els.editor.value, { force: true });
+  });
+}
+
+if (els.settingsMermaidFontSize) {
+  els.settingsMermaidFontSize.addEventListener('change', (e) => {
+    const size = e.target.value ? Number(e.target.value) : undefined;
+    state.settings = state.settings || {};
+    state.settings.mermaidFontSize = size;
+    updateMermaidTheme(
+      state.settings.theme || 'light',
+      state.settings.mermaidTheme,
+      state.settings.mermaidFontSize,
+      state.settings.mermaidFontFamily,
+      state.settings.mermaidFontFamilyCustom
+    );
+    renderPreview(els.editor.value, { force: true });
+  });
+}
+
+if (els.settingsMermaidFontFamily) {
+  els.settingsMermaidFontFamily.addEventListener('change', (e) => {
+    const family = e.target.value;
+    state.settings = state.settings || {};
+    state.settings.mermaidFontFamily = family;
+    if (els.settingsMermaidFontFamilyCustom) {
+      els.settingsMermaidFontFamilyCustom.disabled = family !== 'custom';
+    }
+    updateMermaidTheme(
+      state.settings.theme || 'light',
+      state.settings.mermaidTheme,
+      state.settings.mermaidFontSize,
+      state.settings.mermaidFontFamily,
+      state.settings.mermaidFontFamilyCustom
+    );
+    renderPreview(els.editor.value, { force: true });
+  });
+}
+
+if (els.settingsMermaidFontFamilyCustom) {
+  els.settingsMermaidFontFamilyCustom.addEventListener('change', (e) => {
+    const custom = e.target.value;
+    state.settings = state.settings || {};
+    state.settings.mermaidFontFamilyCustom = custom;
+    updateMermaidTheme(
+      state.settings.theme || 'light',
+      state.settings.mermaidTheme,
+      state.settings.mermaidFontSize,
+      state.settings.mermaidFontFamily,
+      state.settings.mermaidFontFamilyCustom
+    );
+    renderPreview(els.editor.value, { force: true });
+  });
+}
+
 if (els.replaceApply) {
   els.replaceApply.addEventListener('click', applyReplacePanel);
 }
@@ -1985,6 +2394,52 @@ if (els.replaceWith) {
     } else if (e.key === 'Escape') {
       closeReplacePanel();
     }
+  });
+}
+
+if (els.dayActivityIncludeDaily) {
+  els.dayActivityIncludeDaily.addEventListener('change', (e) => {
+    state.dayActivity.includeDaily = !!e.target.checked;
+    if (state.dayActivity.date) loadDayActivity(state.dayActivity.date);
+    renderDayActivity();
+  });
+}
+
+if (els.dayActivitySelectAll) {
+  els.dayActivitySelectAll.addEventListener('click', () => {
+    if (!state.dayActivity.files?.length) return;
+    state.dayActivity.selected = new Set(state.dayActivity.files.map((item) => item.path));
+    renderDayActivity();
+  });
+}
+
+if (els.dayActivityClear) {
+  els.dayActivityClear.addEventListener('click', () => {
+    state.dayActivity.selected = new Set();
+    renderDayActivity();
+  });
+}
+
+if (els.dayActivityOpen) {
+  els.dayActivityOpen.addEventListener('click', async () => {
+    const selected = Array.from(state.dayActivity.selected || []);
+    if (!selected.length) {
+      setMessage('No files selected', 'error');
+      return;
+    }
+    toggleDayActivityModal(true);
+    renderDayActivityModalList(selected, selected[0]);
+    renderDayActivityPreview(selected[0], selected);
+  });
+}
+
+if (els.dayActivityModalClose) {
+  els.dayActivityModalClose.addEventListener('click', () => toggleDayActivityModal(false));
+}
+
+if (els.dayActivityModal) {
+  els.dayActivityModal.addEventListener('click', (e) => {
+    if (e.target === els.dayActivityModal) toggleDayActivityModal(false);
   });
 }
 
