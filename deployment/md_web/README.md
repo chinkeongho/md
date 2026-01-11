@@ -33,3 +33,15 @@ File: `deployment/md_web/md-web.conf`
 ## Notes
 - The nginx config includes WebSocket headers (`map $http_upgrade`), HTTP→HTTPS redirect, and basic hardening headers.
 - If you need a different port/domain, update both the systemd unit `PORT` and the nginx `proxy_pass`/`server_name`.
+- To avoid sudo password prompts during `deployment/deploy.sh`, add a limited sudoers rule for the deploy user:
+  ```
+  sudo visudo
+  ```
+  Add:
+  ```
+  youruser ALL=(ALL) NOPASSWD: /usr/bin/apt-get, /usr/bin/systemctl, /usr/bin/install, /usr/sbin/nginx
+  ```
+- Puppeteer will auto-detect Chromium at common paths (including `/snap/bin/chromium`), but you can override by setting:
+  ```
+  PUPPETEER_EXECUTABLE_PATH=/path/to/chromium
+  ```

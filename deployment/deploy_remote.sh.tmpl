@@ -1,0 +1,119 @@
+#!/bin/bash
+set -euo pipefail
+
+REMOTE_PATH="__REMOTE_PATH__"
+SERVICE_NAME="__SERVICE_NAME__"
+SUDO_CMD="__SUDO_CMD__"
+SUDO_FLAGS="__SUDO_FLAGS__"
+ALLOW_SUDO_PROMPT="__ALLOW_SUDO_PROMPT__"
+REQUIRE_DEPS="__REQUIRE_DEPS__"
+NGINX_CONF_PATH="__NGINX_CONF_PATH__"
+NGINX_REMOTE_CONF="__NGINX_REMOTE_CONF__"
+
+cd "${REMOTE_PATH}"
+if [[ ! -f package.json ]]; then
+  echo "package.json not found in ${REMOTE_PATH}; set REMOTE_PATH correctly." >&2
+  exit 1
+fi
+
+if [[ "${ALLOW_SUDO_PROMPT}" == "1" ]]; then
+  SUDO_FLAGS=""
+fi
+
+MISSING_DEPS=0
+if ! command -v chromium >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1; then
+  echo "[!] Chromium not found. Install it to enable PDF/DOCX/Mermaid exports."
+  MISSING_DEPS=1
+  if command -v apt-get >/dev/null 2>&1; then
+    echo "    apt-get install -y chromium-browser || apt-get install -y chromium"
+  elif command -v dnf >/dev/null 2>&1; then
+    echo "    dnf install -y chromium"
+  elif command -v yum >/dev/null 2>&1; then
+    echo "    yum install -y chromium"
+  elif command -v pacman >/dev/null 2>&1; then
+    echo "    pacman -S chromium"
+  fi
+fi
+
+if command -v fc-list >/dev/null 2>&1; then
+  if fc-list | grep -qiE "Noto Sans CJK|Source Han Sans"; then
+    echo "[+] CJK fonts detected"
+  else
+    FONT_HINTS=(
+      "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+      "/usr/share/fonts/opentype/noto/NotoSansCJK.ttc"
+      "/usr/share/fonts/truetype/noto/NotoSansCJK*"
+      "/usr/share/fonts/opentype/noto/SourceHanSans*"
+    )
+    FONT_FOUND=0
+    for hint in "${FONT_HINTS[@]}"; do
+      if ls ${hint} >/dev/null 2>&1; then
+        FONT_FOUND=1
+        break
+      fi
+    done
+    if [[ "${FONT_FOUND}" == "1" ]]; then
+      echo "[+] CJK fonts detected (font files present)"
+    else
+      echo "[!] CJK fonts not detected. Install to render Chinese in PDF exports."
+      echo "    If fonts are installed but not detected, run: fc-cache -f"
+      MISSING_DEPS=1
+      if command -v apt-get >/dev/null 2>&1; then
+        echo "    apt-get install -y fonts-noto-cjk"
+      elif command -v dnf >/dev/null 2>&1; then
+        echo "    dnf install -y google-noto-sans-cjk-ttc-fonts"
+      elif command -v yum >/dev/null 2>&1; then
+        echo "    yum install -y google-noto-sans-cjk-ttc-fonts"
+      elif command -v pacman >/dev/null 2>&1; then
+        echo "    pacman -S noto-fonts-cjk"
+      fi
+    fi
+  fi
+else
+  echo "[!] fc-list not found; install fontconfig and CJK fonts for PDF export."
+  MISSING_DEPS=1
+  if command -v apt-get >/dev/null 2>&1; then
+    echo "    apt-get install -y fontconfig fonts-noto-cjk"
+  elif command -v dnf >/dev/null 2>&1; then
+    echo "    dnf install -y fontconfig google-noto-sans-cjk-ttc-fonts"
+  elif command -v yum >/dev/null 2>&1; then
+    echo "    yum install -y fontconfig google-noto-sans-cjk-ttc-fonts"
+  elif command -v pacman >/dev/null 2>&1; then
+    echo "    pacman -S fontconfig noto-fonts-cjk"
+  fi
+fi
+
+if [[ "${REQUIRE_DEPS}" == "1" && "${MISSING_DEPS}" == "1" ]]; then
+  echo "[!] Missing required dependencies; aborting deploy. Set REQUIRE_DEPS=0 to override." >&2
+  exit 2
+fi
+
+if command -v npm >/dev/null 2>&1; then
+  npm install --production
+fi
+if command -v npx >/dev/null 2>&1; then
+  echo "[+] Ensuring Puppeteer browser is installed"
+  npx puppeteer browsers install chrome
+fi
+
+UNIT_FILE="${REMOTE_PATH}/${SERVICE_NAME}.service"
+if [[ ! -f "${UNIT_FILE}" ]]; then
+  ALT_UNIT_FILE="${REMOTE_PATH}/deployment/md_web/${SERVICE_NAME}.service"
+  if [[ -f "${ALT_UNIT_FILE}" ]]; then
+    UNIT_FILE="${ALT_UNIT_FILE}"
+  else
+    echo "Unit file not found at ${UNIT_FILE} or ${ALT_UNIT_FILE}. Ensure it is present in the repo." >&2
+    exit 1
+  fi
+fi
+
+${SUDO_CMD} ${SUDO_FLAGS} install -m 644 "${UNIT_FILE}" /etc/systemd/system/${SERVICE_NAME}.service
+${SUDO_CMD} ${SUDO_FLAGS} systemctl daemon-reload
+${SUDO_CMD} ${SUDO_FLAGS} systemctl enable ${SERVICE_NAME} || true
+${SUDO_CMD} ${SUDO_FLAGS} systemctl restart ${SERVICE_NAME}
+${SUDO_CMD} ${SUDO_FLAGS} systemctl status --no-pager ${SERVICE_NAME} || true
+# nginx config (if present locally and nginx exists)
+if command -v nginx >/dev/null 2>&1 && [[ -f "${REMOTE_PATH}/${NGINX_CONF_PATH}" ]]; then
+  ${SUDO_CMD} ${SUDO_FLAGS} install -m 644 "${REMOTE_PATH}/${NGINX_CONF_PATH}" "${NGINX_REMOTE_CONF}"
+  ${SUDO_CMD} ${SUDO_FLAGS} systemctl reload nginx
+fi

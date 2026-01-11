@@ -67,6 +67,8 @@ const state = {
   hoverBound: false,
   lightboxBound: false,
   settings: {},
+  settingsMtime: null,
+  settingsPoller: null,
   history: [],
   historyIndex: -1,
   navigating: false,
@@ -167,6 +169,8 @@ const els = {
   settingsMermaidFontSize: document.getElementById('settings-mermaid-font-size'),
   settingsMermaidFontFamily: document.getElementById('settings-mermaid-font-family'),
   settingsMermaidFontFamilyCustom: document.getElementById('settings-mermaid-font-family-custom'),
+  settingsSidebarFontSize: document.getElementById('settings-sidebar-font-size'),
+  settingsPath: document.getElementById('settings-path'),
   dayActivityDate: document.getElementById('day-activity-date'),
   dayActivityIncludeDaily: document.getElementById('day-activity-include-daily'),
   dayActivitySelectAll: document.getElementById('day-activity-select-all'),
@@ -331,6 +335,7 @@ async function afterLogin() {
   setMessage('Ready');
   updateHistoryButtons();
   applySplit();
+  startSettingsPoller();
   if (els.hoverPreviewContent && !state.hoverBound) {
     els.hoverPreviewContent.addEventListener('click', (e) => {
       const target = e.target.closest('.hover-link');
@@ -1089,7 +1094,10 @@ async function exportNote(format) {
     )}`;
     const res = await fetch(url, { credentials: 'include' });
     if (!res.ok) {
-      throw new Error('export_failed');
+      const msg = await res.text().catch(() => '');
+      const err = new Error(msg || 'export_failed');
+      err.status = res.status;
+      throw err;
     }
     const blob = await res.blob();
     const fallbackName = `${state.currentPath.split('/').pop()?.replace(/\.[^/.]+$/, '') || 'note'}.${format}`;
@@ -1104,7 +1112,20 @@ async function exportNote(format) {
     setExportStatus(`${format.toUpperCase()} exported`, 'success');
     setTimeout(() => setExportStatus(''), 2000);
   } catch (err) {
-    console.error(err);
+    let detail = '';
+    if (err?.message) {
+      try {
+        const parsed = JSON.parse(err.message);
+        if (parsed?.message) detail = parsed.message;
+      } catch {
+        detail = err.message.includes('export_failed') ? '' : err.message;
+      }
+    }
+    if (detail) {
+      console.error(`${format.toUpperCase()} export failed: ${detail}`);
+    } else {
+      console.error(err);
+    }
     setExportStatus(`${format.toUpperCase()} export failed`, 'error');
   } finally {
     state.exporting = false;
@@ -1120,6 +1141,10 @@ els.logoutBtn.addEventListener('click', async () => {
   try {
     await apiPost('/api/logout');
   } finally {
+    if (state.settingsPoller) {
+      clearInterval(state.settingsPoller);
+      state.settingsPoller = null;
+    }
     toggleView(false);
   }
 });
@@ -1816,10 +1841,20 @@ function applyTheme(theme) {
     state.settings.mermaidFontFamily,
     state.settings.mermaidFontFamilyCustom
   );
+  applySidebarFontSize(state.settings.sidebarFontSize);
   try {
     localStorage.setItem('preferredTheme', theme || 'light');
   } catch {
     // ignore storage failures
+  }
+}
+
+function applySidebarFontSize(size) {
+  const value = Number(size);
+  if (Number.isFinite(value)) {
+    document.documentElement.style.setProperty('--sidebar-font-size', `${value}rem`);
+  } else {
+    document.documentElement.style.removeProperty('--sidebar-font-size');
   }
 }
 
@@ -2184,10 +2219,14 @@ els.currentPathInput.addEventListener('blur', () => {
   renameFromInput();
 });
 
-async function loadSettings() {
-  try {
-    const data = await apiGet('/api/settings');
-    state.settings = data.settings || {};
+function applySettingsData(data, { silent = false } = {}) {
+  state.settings = data.settings || {};
+  if (Object.prototype.hasOwnProperty.call(data, 'settingsMtime')) {
+    state.settingsMtime = data.settingsMtime;
+  }
+  if (els.settingsPath && data.settingsPath) {
+    els.settingsPath.value = data.settingsPath;
+  }
     if (els.settingsDailyDir) els.settingsDailyDir.value = state.settings.dailyNotesDir || '';
     if (els.settingsDailyTemplate) els.settingsDailyTemplate.value = state.settings.dailyNotesTemplate || '';
     if (els.settingsWeeklyDir) els.settingsWeeklyDir.value = state.settings.weeklyNotesDir || '';
@@ -2224,6 +2263,11 @@ async function loadSettings() {
     if (els.settingsMermaidFontFamilyCustom && els.settingsMermaidFontFamily) {
       els.settingsMermaidFontFamilyCustom.disabled = els.settingsMermaidFontFamily.value !== 'custom';
     }
+    if (els.settingsSidebarFontSize) {
+      const size = Number(state.settings.sidebarFontSize);
+      els.settingsSidebarFontSize.value = Number.isFinite(size) ? String(size) : '';
+      applySidebarFontSize(size);
+    }
     if (els.settingsNoteTemplate) els.settingsNoteTemplate.value = state.settings.noteTemplate || '';
     if (els.settingsSearchLimit) els.settingsSearchLimit.value = state.settings.searchLimit || 1000;
     if (els.settingsLintEnabled) els.settingsLintEnabled.checked = state.settings.lintEnabled !== false;
@@ -2232,11 +2276,33 @@ async function loadSettings() {
     if (els.settingsLintTrimTrailing) els.settingsLintTrimTrailing.checked = state.settings.lintTrimTrailing !== false;
     if (els.settingsLintHeadingLevels) els.settingsLintHeadingLevels.checked = state.settings.lintHeadingLevels !== false;
     applyTheme(state.settings.theme || 'light');
-    if (els.settingsStatus) els.settingsStatus.textContent = '';
+    if (!silent && els.settingsStatus) els.settingsStatus.textContent = '';
+}
+
+async function loadSettings() {
+  try {
+    const data = await apiGet('/api/settings');
+    applySettingsData(data);
   } catch (err) {
     setMessage('Could not load settings', 'error');
     console.error(err);
   }
+}
+
+function startSettingsPoller() {
+  if (state.settingsPoller) clearInterval(state.settingsPoller);
+  state.settingsPoller = setInterval(async () => {
+    if (els.settingsBody && !els.settingsBody.classList.contains('hidden')) return;
+    try {
+      const data = await apiGet('/api/settings');
+      if (data.settingsMtime && data.settingsMtime !== state.settingsMtime) {
+        applySettingsData(data, { silent: true });
+        renderPreview(els.editor.value, { force: true });
+      }
+    } catch (err) {
+      console.error('Settings poll failed', err);
+    }
+  }, 15000);
 }
 
 async function saveSettings() {
@@ -2261,6 +2327,7 @@ async function saveSettings() {
       mermaidFontSize: els.settingsMermaidFontSize?.value ? Number(els.settingsMermaidFontSize.value) : undefined,
       mermaidFontFamily: els.settingsMermaidFontFamily?.value || 'auto',
       mermaidFontFamilyCustom: els.settingsMermaidFontFamilyCustom?.value || '',
+      sidebarFontSize: els.settingsSidebarFontSize?.value ? els.settingsSidebarFontSize.value : undefined,
       noteTemplate: els.settingsNoteTemplate.value,
       searchLimit: Number(els.settingsSearchLimit.value) || undefined,
       lintEnabled: !!els.settingsLintEnabled?.checked,
@@ -2270,8 +2337,7 @@ async function saveSettings() {
       lintHeadingLevels: !!els.settingsLintHeadingLevels?.checked
     };
     const data = await apiPost('/api/settings', payload);
-    state.settings = data.settings || {};
-    applyTheme(state.settings.theme || 'light');
+    applySettingsData(data, { silent: true });
     els.settingsStatus.textContent = 'Saved';
     setTimeout(() => (els.settingsStatus.textContent = ''), 2000);
     await loadDirectory(state.currentDir);
@@ -2365,6 +2431,17 @@ if (els.settingsMermaidFontFamilyCustom) {
       state.settings.mermaidFontFamilyCustom
     );
     renderPreview(els.editor.value, { force: true });
+  });
+}
+
+if (els.settingsSidebarFontSize) {
+  els.settingsSidebarFontSize.addEventListener('change', (e) => {
+    const size = e.target.value ? Number(e.target.value) : undefined;
+    state.settings = state.settings || {};
+    state.settings.sidebarFontSize = size;
+    if (Number.isFinite(size)) {
+      document.documentElement.style.setProperty('--sidebar-font-size', `${size}rem`);
+    }
   });
 }
 

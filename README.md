@@ -86,7 +86,7 @@ Single-user web app to browse, view, and edit the Markdown knowledge base in `ze
 - Calendar uses filenames containing dates (`YYYY-MM-DD` or `YYYYMMDD...`) to highlight existing notes; clicking a day creates/opens a note using the configured template (default `Daily/YYYY-MM-DD DAILY.md`).
 - Week rows link to `Weekly notes/YYYY-{W}WW.md` (ISO week; folder/template configurable in settings); existing weekly notes highlight the week number, and you can hover any day or week to see a small preview without opening it.
 - Attachments (images, PDFs) are served from `/vault/<path>`; relative Markdown image links resolve to their location next to the current note.
-- Settings are stored on disk (`.vault_settings.json` by default; override with `SETTINGS_PATH`) so you can reuse/share your configuration across runs.
+- Settings are stored on disk (`settings-md.md` in the vault by default; override with `SETTINGS_PATH`) so you can reuse/share your configuration across runs.
 - Settings panel lets you set:
   - Daily notes folder (default `Daily` under the vault) used for calendar-created notes when the template lacks a folder.
   - Daily note filename template (default `Daily/YYYY-MM-DD DAILY.md`).

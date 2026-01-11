@@ -12,8 +12,8 @@ const DEFAULT_PORT = process.env.PORT || 3000;
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
 const AUTH_USER = process.env.AUTH_USER || 'admin';
 const AUTH_PASS = process.env.AUTH_PASS || 'password';
-const SETTINGS_PATH = path.resolve(process.env.SETTINGS_PATH || path.join(__dirname, '.vault_settings.json'));
 const VAULT_ROOT = path.resolve(process.env.VAULT_ROOT || DEFAULT_VAULT);
+const SETTINGS_PATH = path.resolve(process.env.SETTINGS_PATH || path.join(VAULT_ROOT, 'settings-md.md'));
 const MAX_SEARCH_RESULTS = 50;
 const EXPORT_PDF_ENABLED = process.env.EXPORT_PDF_ENABLED !== 'false';
 const EXPORT_DOCX_ENABLED = process.env.EXPORT_DOCX_ENABLED !== 'false';
@@ -54,7 +54,8 @@ shortcutMultiSelectAll: 'Ctrl+Shift+D',
   mermaidTheme: 'auto',
   mermaidFontSize: 14,
   mermaidFontFamily: 'mono',
-  mermaidFontFamilyCustom: ''
+  mermaidFontFamilyCustom: '',
+  sidebarFontSize: 0.85
 };
 
 const ALLOWED_SORT_ORDERS = ['mtime_desc', 'mtime_asc', 'name_asc', 'name_desc'];
@@ -164,6 +165,13 @@ function resolveMermaidFontFamily(value, custom) {
 
 let exportDeps = null;
 let exportCssCache = null;
+const CHROMIUM_PATHS = [
+  '/snap/bin/chromium',
+  '/usr/bin/chromium',
+  '/usr/bin/chromium-browser',
+  '/usr/bin/google-chrome',
+  '/usr/bin/google-chrome-stable'
+];
 
 function loadExportDeps() {
   if (exportDeps) return exportDeps;
@@ -181,6 +189,15 @@ function loadExportDeps() {
   }
 }
 
+function resolveChromiumExecutable() {
+  const envPath = process.env.PUPPETEER_EXECUTABLE_PATH;
+  if (envPath && fsSync.existsSync(envPath)) return envPath;
+  for (const candidate of CHROMIUM_PATHS) {
+    if (fsSync.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
 async function loadExportCss() {
   if (exportCssCache) return exportCssCache;
   const cssPath = path.join(__dirname, 'public', 'styles.css');
@@ -192,13 +209,64 @@ async function loadExportCss() {
   return exportCssCache;
 }
 
+function parseSettingsFile(raw) {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    // continue
+  }
+  const fenced = /```json\s*([\s\S]*?)```/i.exec(raw);
+  if (fenced?.[1]) {
+    try {
+      return JSON.parse(fenced[1]);
+    } catch {
+      // continue
+    }
+  }
+  const inline = /{[\s\S]*}/.exec(raw);
+  if (inline?.[0]) {
+    try {
+      return JSON.parse(inline[0]);
+    } catch {
+      // continue
+    }
+  }
+  return null;
+}
+
+function parseSettingsFrontmatter(raw) {
+  if (!raw || !raw.startsWith('---')) return {};
+  const match = raw.match(/^---\n([\s\S]*?)\n---\n?/);
+  if (!match) return {};
+  const lines = match[1].split('\n');
+  const meta = {};
+  lines.forEach((line) => {
+    const [key, ...rest] = line.split(':');
+    if (!key) return;
+    const value = rest.join(':').trim();
+    meta[key.trim()] = value;
+  });
+  return meta;
+}
+
 async function loadSettings() {
   try {
     const raw = await fs.readFile(SETTINGS_PATH, 'utf8');
-    const parsed = JSON.parse(raw);
+    const parsed = parseSettingsFile(raw);
+    if (!parsed) throw new Error('settings_parse_failed');
     return sanitizeSettings(parsed);
   } catch {
     return { ...DEFAULT_SETTINGS };
+  }
+}
+
+async function getSettingsMtime() {
+  try {
+    const stat = await fs.stat(SETTINGS_PATH);
+    return stat.mtimeMs;
+  } catch {
+    return null;
   }
 }
 
@@ -269,6 +337,17 @@ function sanitizeSettings(partial = {}) {
     ? merged.mermaidFontFamily.toLowerCase()
     : DEFAULT_SETTINGS.mermaidFontFamily;
   cleaned.mermaidFontFamilyCustom = typeof merged.mermaidFontFamilyCustom === 'string' ? merged.mermaidFontFamilyCustom : '';
+  const sidebarSize =
+    typeof merged.sidebarFontSize === 'number'
+      ? merged.sidebarFontSize
+      : typeof merged.sidebarFontSize === 'string'
+        ? Number(merged.sidebarFontSize.replace(',', '.'))
+        : NaN;
+  if (Number.isFinite(sidebarSize)) {
+    cleaned.sidebarFontSize = Math.min(Math.max(sidebarSize, 0.6), 2.0);
+  } else {
+    cleaned.sidebarFontSize = DEFAULT_SETTINGS.sidebarFontSize;
+  }
   const allowedWeekStarts = ['monday', 'sunday'];
   cleaned.weekStartsOn = allowedWeekStarts.includes((merged.weekStartsOn || '').toLowerCase())
     ? merged.weekStartsOn.toLowerCase()
@@ -277,9 +356,15 @@ function sanitizeSettings(partial = {}) {
 }
 
 async function saveSettings(partial = {}) {
+  const raw = await fs.readFile(SETTINGS_PATH, 'utf8').catch(() => '');
   const current = await loadSettings();
   const next = sanitizeSettings({ ...current, ...partial });
-  await fs.writeFile(SETTINGS_PATH, JSON.stringify(next, null, 2), 'utf8');
+  const now = new Date().toISOString();
+  const meta = parseSettingsFrontmatter(raw);
+  const created = meta.created || now;
+  const frontmatter = `---\ncreated: ${created}\nupdated: ${now}\n---\n`;
+  const body = `${JSON.stringify(next, null, 2)}\n`;
+  await fs.writeFile(SETTINGS_PATH, `${frontmatter}${body}`, 'utf8');
   return next;
 }
 
@@ -332,7 +417,7 @@ function applyNoteTemplate(template, ctx = {}) {
 
 async function resolveWikiTarget(targetRaw) {
   if (!targetRaw) return null;
-  const trimmed = targetRaw.trim().replace(/^\/+/, '');
+  const trimmed = targetRaw.split('|')[0].trim().replace(/^\/+/, '');
   if (!trimmed) return null;
   const hasExt = /\.[a-z0-9]+$/i.test(trimmed);
   const candidateMd = hasExt ? trimmed : `${trimmed}.md`;
@@ -348,6 +433,52 @@ async function resolveWikiTarget(targetRaw) {
   const byBaseNoExt = files.find((f) => path.basename(f.rel, path.extname(f.rel)) === baseNoExt);
   if (byBaseNoExt) return byBaseNoExt.rel;
   return toPosix(candidateMd); // allow creation fallback
+}
+
+async function replaceAsync(str, regex, replacer) {
+  const matches = [];
+  str.replace(regex, (...args) => {
+    matches.push(args);
+    return '';
+  });
+  if (!matches.length) return str;
+  let result = '';
+  let lastIndex = 0;
+  for (const match of matches) {
+    const [full, ...rest] = match;
+    const index = match[match.length - 2];
+    result += str.slice(lastIndex, index);
+    // eslint-disable-next-line no-await-in-loop
+    result += await replacer(full, ...rest);
+    lastIndex = index + full.length;
+  }
+  result += str.slice(lastIndex);
+  return result;
+}
+
+async function expandWikiLinksForExport(text) {
+  let out = text || '';
+  out = await replaceAsync(out, /!\[\[([^\]]+)\]\]/g, async (_m, p1) => {
+    const raw = (p1 || '').trim();
+    const target = raw.split('|')[0].trim();
+    if (!target) return '';
+    const resolved = await resolveWikiTarget(target);
+    const rel = resolved ? toPosix(resolved) : target.replace(/^\/+/, '');
+    if (isImageFile(rel)) {
+      return `![](/vault/${rel})`;
+    }
+    return `[${rel}](${rel})`;
+  });
+  out = await replaceAsync(out, /\[\[([^\]]+)\]\]/g, async (_m, p1) => {
+    const [targetRaw, labelRaw] = (p1 || '').split('|');
+    const target = (targetRaw || '').trim();
+    if (!target) return '';
+    const label = (labelRaw || target).trim();
+    const resolved = await resolveWikiTarget(target);
+    const rel = resolved ? toPosix(resolved) : target.replace(/^\/+/, '');
+    return `[${label}](${rel})`;
+  });
+  return out;
 }
 
 async function listDirectory(relDir = '', sortOrder = DEFAULT_SETTINGS.fileSortOrder) {
@@ -548,6 +679,12 @@ async function searchVault(query) {
 function resolveExportResource(href, baseDir) {
   if (!href) return '';
   if (/^(https?:|mailto:|data:|tel:)/i.test(href)) return href;
+  if (href.startsWith('/vault/')) {
+    return toPosix(href.replace(/^\/+vault\//, ''));
+  }
+  if (href.startsWith('/')) {
+    return toPosix(href.replace(/^\/+/, ''));
+  }
   const clean = href.replace(/^\.\//, '').replace(/^\/+/, '');
   const prefix = baseDir ? `${baseDir}/` : '';
   return toPosix(path.posix.join(prefix, clean));
@@ -573,8 +710,7 @@ function renderMarkdownToHtmlForExport(text, baseDir) {
     return `<pre><code>${escapeHtml(code)}</code></pre>`;
   };
   marked.setOptions({ gfm: true, breaks: true });
-  const stripped = stripFrontmatter(text);
-  return marked.parse(stripped, { renderer });
+  return marked.parse(text, { renderer });
 }
 
 function getMimeType(filePath) {
@@ -605,7 +741,7 @@ async function inlineImages(html, baseDir) {
     const src = img.getAttribute('src') || '';
     if (!src || /^(https?:|mailto:|data:|tel:)/i.test(src)) continue;
     const normalized = src.replace(/^\/?vault\//, '').split('?')[0];
-    const rel = toPosix(path.posix.join(baseDir || '', normalized));
+    const rel = toPosix(normalized);
     let filePath;
     try {
       filePath = resolveVaultPath(rel);
@@ -673,8 +809,10 @@ async function buildExportDocument(bodyHtml, title, themeName) {
 
 async function withMermaidPage(html, mermaidConfig, handler) {
   const { puppeteer, mermaidPath } = loadExportDeps();
+  const executablePath = resolveChromiumExecutable();
   const browser = await puppeteer.launch({
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    executablePath: executablePath || undefined
   });
   try {
     const page = await browser.newPage();
@@ -733,6 +871,29 @@ function trimSnippet(line) {
   return `${trimmed.slice(0, 157)}...`;
 }
 
+function sanitizeHeaderValue(value) {
+  return (value || '').toString().replace(/[\r\n"]/g, '').trim();
+}
+
+function toAsciiFilename(filename, fallbackExt) {
+  const clean = sanitizeHeaderValue(filename);
+  const base = clean.replace(/[^A-Za-z0-9._-]/g, '_') || 'export';
+  if (fallbackExt && !base.toLowerCase().endsWith(fallbackExt.toLowerCase())) {
+    return `${base}${fallbackExt}`;
+  }
+  return base;
+}
+
+function setDownloadHeaders(res, filename, mimeType, fallbackExt) {
+  const safeName = sanitizeHeaderValue(filename);
+  const asciiName = toAsciiFilename(safeName, fallbackExt);
+  res.setHeader('Content-Type', mimeType);
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(safeName || asciiName)}`
+  );
+}
+
 function getBaseDir(relPath) {
   const dir = toPosix(path.posix.dirname(relPath));
   return dir === '.' ? '' : dir;
@@ -743,7 +904,9 @@ async function buildExportHtmlForNote(relPath, settings, themeOverride) {
   const content = await fs.readFile(filePath, 'utf8');
   const baseDir = getBaseDir(relPath);
   const title = extractFrontmatterTitle(content) || path.basename(relPath, path.extname(relPath));
-  const bodyHtml = renderMarkdownToHtmlForExport(content, baseDir);
+  const stripped = stripFrontmatter(content);
+  const expanded = await expandWikiLinksForExport(stripped);
+  const bodyHtml = renderMarkdownToHtmlForExport(expanded, baseDir);
   const inlined = await inlineImages(bodyHtml, baseDir);
   const themeName = resolveThemeOverride(themeOverride, settings.theme || DEFAULT_SETTINGS.theme);
   const html = await buildExportDocument(inlined, title, themeName);
@@ -997,7 +1160,8 @@ function buildApp() {
   app.get('/api/settings', requireAuth(AUTH_USER), async (_req, res) => {
     try {
       const settings = await loadSettings();
-      res.json({ settings, defaults: DEFAULT_SETTINGS });
+      const settingsMtime = await getSettingsMtime();
+      res.json({ settings, defaults: DEFAULT_SETTINGS, settingsMtime, settingsPath: SETTINGS_PATH, vaultRoot: VAULT_ROOT });
     } catch (err) {
       res.status(500).json({ error: 'settings_failed', message: err.message });
     }
@@ -1006,7 +1170,8 @@ function buildApp() {
   app.post('/api/settings', requireAuth(AUTH_USER), async (req, res) => {
     try {
       const next = await saveSettings(req.body || {});
-      res.json({ ok: true, settings: next });
+      const settingsMtime = await getSettingsMtime();
+      res.json({ ok: true, settings: next, settingsMtime, settingsPath: SETTINGS_PATH, vaultRoot: VAULT_ROOT });
     } catch (err) {
       res.status(400).json({ error: 'settings_failed', message: err.message });
     }
@@ -1094,8 +1259,7 @@ function buildApp() {
         })
       );
       const filename = `${title || path.basename(rel, path.extname(rel))}.pdf`;
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      setDownloadHeaders(res, filename, 'application/pdf', '.pdf');
       res.send(pdfBuffer);
     } catch (err) {
       res.status(500).json({ error: 'export_failed', message: err.message });
@@ -1143,8 +1307,12 @@ function buildApp() {
       );
       const docxBuffer = await htmlToDocx(htmlWithMermaid);
       const filename = `${title || path.basename(rel, path.extname(rel))}.docx`;
-      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      setDownloadHeaders(
+        res,
+        filename,
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        '.docx'
+      );
       res.send(docxBuffer);
     } catch (err) {
       res.status(500).json({ error: 'export_failed', message: err.message });
@@ -1192,13 +1360,11 @@ function buildApp() {
       });
       const filename = `${path.basename(rel, path.extname(rel))}-diagram-${index + 1}.${format}`;
       if (format === 'svg') {
-        res.setHeader('Content-Type', 'image/svg+xml');
-        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        setDownloadHeaders(res, filename, 'image/svg+xml', '.svg');
         res.send(result);
         return;
       }
-      res.setHeader('Content-Type', 'image/png');
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      setDownloadHeaders(res, filename, 'image/png', '.png');
       res.send(result);
     } catch (err) {
       res.status(500).json({ error: 'export_failed', message: err.message });

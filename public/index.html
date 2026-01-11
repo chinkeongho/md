@@ -140,33 +140,41 @@
                 <option value="paper">Paper</option>
               </select>
             </div>
-            <div class="settings-field">
-              <label for="settings-mermaid-theme">Mermaid theme</label>
-              <select id="settings-mermaid-theme">
-                <option value="auto">Auto (match app theme)</option>
-                <option value="default">Default</option>
-                <option value="neutral">Neutral</option>
-                <option value="dark">Dark</option>
-                <option value="forest">Forest</option>
-                <option value="base">Base</option>
-              </select>
-            </div>
-            <div class="settings-field">
-              <label for="settings-mermaid-font-size">Mermaid font size (px)</label>
-              <input id="settings-mermaid-font-size" type="number" min="8" max="32" step="1" placeholder="14">
-            </div>
-            <div class="settings-field">
-              <label for="settings-mermaid-font-family">Mermaid font family</label>
-              <select id="settings-mermaid-font-family">
-                <option value="auto">Auto (Mermaid default)</option>
-                <option value="sans">System sans</option>
-                <option value="serif">System serif</option>
-                <option value="mono">System mono</option>
-                <option value="custom">Custom</option>
-              </select>
-              <input id="settings-mermaid-font-family-custom" type="text" placeholder="e.g. IBM Plex Mono, monospace">
-            </div>
             <div id="settings-body" class="settings-body hidden">
+              <div class="settings-field">
+                <label for="settings-mermaid-theme">Mermaid theme</label>
+                <select id="settings-mermaid-theme">
+                  <option value="auto">Auto (match app theme)</option>
+                  <option value="default">Default</option>
+                  <option value="neutral">Neutral</option>
+                  <option value="dark">Dark</option>
+                  <option value="forest">Forest</option>
+                  <option value="base">Base</option>
+                </select>
+              </div>
+              <div class="settings-field">
+                <label for="settings-mermaid-font-size">Mermaid font size (px)</label>
+                <input id="settings-mermaid-font-size" type="number" min="8" max="32" step="1" placeholder="14">
+              </div>
+              <div class="settings-field">
+                <label for="settings-mermaid-font-family">Mermaid font family</label>
+                <select id="settings-mermaid-font-family">
+                  <option value="auto">Auto (Mermaid default)</option>
+                  <option value="sans">System sans</option>
+                  <option value="serif">System serif</option>
+                  <option value="mono">System mono</option>
+                  <option value="custom">Custom</option>
+                </select>
+                <input id="settings-mermaid-font-family-custom" type="text" placeholder="e.g. IBM Plex Mono, monospace">
+              </div>
+              <div class="settings-field">
+                <label for="settings-sidebar-font-size">Sidebar font size (rem)</label>
+                <input id="settings-sidebar-font-size" type="number" min="0.6" max="2.0" step="0.01" placeholder="0.85">
+              </div>
+              <div class="settings-field">
+                <label for="settings-path">Settings file</label>
+                <input id="settings-path" type="text" readonly>
+              </div>
               <div class="settings-field">
                 <label for="settings-daily-dir">Daily notes folder</label>
                 <input type="text" id="settings-daily-dir" placeholder="Daily">
